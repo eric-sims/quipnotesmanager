@@ -11,28 +11,61 @@ vi.mock('@/api', () => ({
   },
 }))
 
+// Stub the clipboard helper so Copy invite doesn't touch the real clipboard.
+vi.mock('@/clipboard', () => ({
+  copyText: vi.fn().mockResolvedValue(true),
+  shareMessage: (code) => `Join my QuipNotes game! Code: ${code}`,
+}))
+
 import App from './App.vue'
 
-function okJson(data) {
-  return { ok: true, status: 200, json: async () => data }
+function okJson(data, status = 200) {
+  return { ok: status >= 200 && status < 300, status, json: async () => data }
 }
 
 beforeEach(() => {
   apiRequest.mockReset()
   isOffline = false
+  window.localStorage.clear()
 })
 
-describe('App', () => {
-  it('fetches submitted notes and renders one card each', async () => {
-    apiRequest.mockResolvedValue(okJson({ notes: ['note a', 'note b'] }))
-    const wrapper = mount(App)
+// Mount App and start a game so we land in the hosting view with a known code.
+async function mountHosting(code = '4821') {
+  apiRequest.mockResolvedValueOnce(okJson({ code }, 201))
+  const wrapper = mount(App)
+  await wrapper.find('button').trigger('click') // Start Game
+  await flushPromises()
+  return wrapper
+}
 
-    await wrapper.findAll('button')[0].trigger('click') // Get Notes
+describe('App lobby', () => {
+  it('shows Start Game and no game code initially', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Start Game')
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+  })
+
+  it('starts a game and shows the returned code', async () => {
+    const wrapper = await mountHosting('4821')
+    expect(apiRequest).toHaveBeenCalledWith('POST', '/games', null, {
+      'Content-Type': 'application/json',
+    })
+    expect(wrapper.find('.code-value').text()).toBe('4821')
+  })
+})
+
+describe('App hosting', () => {
+  it('fetches submitted notes for the current game and renders one card each', async () => {
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a', 'note b'] }))
+    await wrapper.find('.actions button').trigger('click') // Get Notes
     await flushPromises()
 
-    expect(apiRequest).toHaveBeenCalledWith(
+    expect(apiRequest).toHaveBeenLastCalledWith(
       'GET',
-      '/game/submitted-notes',
+      '/games/4821/submitted-notes',
       null,
       { 'Content-Type': 'application/json' },
     )
@@ -41,26 +74,44 @@ describe('App', () => {
   })
 
   it('clears the notes on Clear Notes', async () => {
-    apiRequest.mockResolvedValue(okJson({ notes: ['note a'] }))
-    const wrapper = mount(App)
+    const wrapper = await mountHosting('4821')
 
-    await wrapper.findAll('button')[0].trigger('click') // Get Notes
+    apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a'] }))
+    await wrapper.findAll('.actions button')[0].trigger('click') // Get Notes
     await flushPromises()
     expect(wrapper.findAllComponents({ name: 'ClickCard' })).toHaveLength(1)
 
-    apiRequest.mockResolvedValue(okJson({ notes: [] }))
-    await wrapper.findAll('button')[1].trigger('click') // Clear Notes
+    apiRequest.mockResolvedValueOnce(okJson({ notes: [] }))
+    await wrapper.findAll('.actions button')[1].trigger('click') // Clear Notes
     await flushPromises()
 
     expect(apiRequest).toHaveBeenLastCalledWith(
       'DELETE',
-      '/game/submitted-notes',
+      '/games/4821/submitted-notes',
       null,
       { 'Content-Type': 'application/json' },
     )
     expect(wrapper.findAllComponents({ name: 'ClickCard' })).toHaveLength(0)
   })
 
+  it('ends the game and returns to the lobby', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockResolvedValueOnce(okJson({}, 200))
+    await wrapper.findAll('.actions button')[2].trigger('click') // End Game
+    await flushPromises()
+
+    expect(apiRequest).toHaveBeenLastCalledWith('DELETE', '/games/4821', null, {
+      'Content-Type': 'application/json',
+    })
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Start Game')
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('App offline badge', () => {
   it('shows the offline badge only when running offline', async () => {
     isOffline = true
     const wrapper = mount(App)
