@@ -69,6 +69,16 @@ export default {
         // localStorage can throw in private-mode / sandboxed contexts; ignore.
       }
     },
+    // Drop the active game and go back to the lobby. Used both when the host
+    // ends a game and when the server tells us the game is gone (e.g. it
+    // restarted and wiped its in-memory games), so the host is never stranded
+    // on a dead code.
+    returnToLobby(message) {
+      this.code = "";
+      this.responses = [];
+      this.persistCode();
+      if (message) alert(message);
+    },
     async startGame() {
       if (this.busy) return;
       this.busy = true;
@@ -91,15 +101,21 @@ export default {
       if (!this.code) return;
       if (!confirm(`End game ${this.code}? Players will be disconnected.`)) return;
       try {
+        // A 404 means the game is already gone (the server may have restarted)
+        // — that's still a successful end from the host's point of view.
         const res = await apiRequest("DELETE", `/games/${this.code}`, null, {
           "Content-Type": "application/json",
         });
-        if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
-        this.code = "";
-        this.responses = [];
-        this.persistCode();
-      } catch (error) {
-        alert(`Could not end game: ${error.message}`);
+        if (!res.ok && res.status !== 404) {
+          throw new Error(`HTTP error! Status: ${res.status}`);
+        }
+        this.returnToLobby();
+      } catch {
+        // The server is unreachable. End locally anyway so the host isn't
+        // stranded on a code they can no longer manage.
+        this.returnToLobby(
+          "Couldn't reach the server, so the game was ended locally."
+        );
       }
     },
     getNotes() {
@@ -108,17 +124,21 @@ export default {
         "Content-Type": "application/json",
       })
         .then((response) => {
+          if (response.status === 404) {
+            // The game no longer exists (server likely restarted). Recover to
+            // the lobby instead of leaving the host stuck on a dead code.
+            this.returnToLobby(
+              "That game no longer exists — the server may have restarted. Back to the lobby."
+            );
+            return null;
+          }
           if (!response.ok) {
-            const msg =
-              response.status === 404
-                ? "Game not found"
-                : `HTTP error! Status: ${response.status}`;
-            throw new Error(msg);
+            throw new Error(`HTTP error! Status: ${response.status}`);
           }
           return response.json();
         })
         .then((data) => {
-          this.responses = data.notes;
+          if (data) this.responses = data.notes;
         })
         .catch((error) => {
           alert(`Error fetching data: ${error.message}`);
@@ -128,17 +148,23 @@ export default {
       if (!this.code) return;
       apiRequest("DELETE", `/games/${this.code}/submitted-notes`, null, {
         "Content-Type": "application/json",
-      }).then((response) => {
-        if (!response.ok) {
-          alert(
-            `Error clearing notes: ${
-              response.status === 404 ? "Game not found" : response.status
-            }`
-          );
-          return;
-        }
-        this.responses = [];
-      });
+      })
+        .then((response) => {
+          if (response.status === 404) {
+            this.returnToLobby(
+              "That game no longer exists — the server may have restarted. Back to the lobby."
+            );
+            return;
+          }
+          if (!response.ok) {
+            alert(`Error clearing notes: ${response.status}`);
+            return;
+          }
+          this.responses = [];
+        })
+        .catch((error) => {
+          alert(`Error clearing notes: ${error.message}`);
+        });
     },
     async copyInvite() {
       const ok = await copyText(shareMessage(this.code));

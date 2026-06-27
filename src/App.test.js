@@ -109,6 +109,35 @@ describe('App hosting', () => {
     expect(wrapper.text()).toContain('Start Game')
     vi.unstubAllGlobals()
   })
+
+  it('returns to the lobby when Get Notes finds the game gone (404)', async () => {
+    vi.stubGlobal('alert', vi.fn())
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockResolvedValueOnce(okJson({ error: 'game 4821 not found' }, 404))
+    await wrapper.findAll('.actions button')[0].trigger('click') // Get Notes
+    await flushPromises()
+
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Start Game')
+    expect(window.localStorage.getItem('quipnotes.manager.code')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it('ends locally and returns to the lobby when the server is unreachable', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true))
+    vi.stubGlobal('alert', vi.fn())
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    await wrapper.findAll('.actions button')[2].trigger('click') // End Game
+    await flushPromises()
+
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Start Game')
+    expect(window.localStorage.getItem('quipnotes.manager.code')).toBeNull()
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('App offline badge', () => {
