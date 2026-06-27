@@ -1,5 +1,6 @@
 <template>
   <h1>Turned In Ransom Notes</h1>
+  <p v-if="isOffline" class="offline-badge">Offline mode — no server</p>
   <p>Number of Notes: {{responses.length}}</p>
   <div id="app" class="center">
     <ClickCard v-for="resp in responses" :key="resp" :content="resp"/>
@@ -11,7 +12,7 @@
 
 <script>
 import ClickCard from "@/components/ClickCard.vue";
-import {apiRequest} from "@/api";
+import {apiRequest, IS_OFFLINE} from "@/api";
 
 export default {
   name: "App",
@@ -21,6 +22,7 @@ export default {
   data() {
     return {
       responses: [],
+      isOffline: IS_OFFLINE,
     };
   },
   methods: {
@@ -64,6 +66,15 @@ body {
   margin: auto;
   width: 50%;
   padding: 10px;
+}
+.offline-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  font: 14px "Lucida Console", "Courier New", monospace;
+  font-weight: bold;
+  color: #fff;
+  background-color: #b8860b;
+  border-radius: 4px;
 }
 .gameButton {
   width: 200px; /* Set button width in pixels */
