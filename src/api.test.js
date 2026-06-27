@@ -17,9 +17,10 @@ describe('when VITE_OFFLINE is set', () => {
 
     expect(IS_OFFLINE).toBe(true)
 
-    // Dispatches to the real mock (no fetch involved): submitted-notes comes
-    // back with a notes payload, proving it never touched the network.
-    const res = await apiRequest('GET', '/game/submitted-notes')
+    // Dispatches to the real mock (no fetch involved): the seeded game's
+    // submitted-notes comes back with a notes payload, proving it never
+    // touched the network.
+    const res = await apiRequest('GET', '/games/1234/submitted-notes')
     const data = await res.json()
     expect(res.ok).toBe(true)
     expect(Array.isArray(data.notes)).toBe(true)
