@@ -69,7 +69,7 @@ describe('App hosting', () => {
       null,
       { 'Content-Type': 'application/json' },
     )
-    expect(wrapper.findAllComponents({ name: 'ClickCard' })).toHaveLength(2)
+    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(2)
     expect(wrapper.text()).toContain('Number of Notes: 2')
   })
 
@@ -79,7 +79,7 @@ describe('App hosting', () => {
     apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a'] }))
     await wrapper.findAll('.actions button')[0].trigger('click') // Get Notes
     await flushPromises()
-    expect(wrapper.findAllComponents({ name: 'ClickCard' })).toHaveLength(1)
+    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(1)
 
     apiRequest.mockResolvedValueOnce(okJson({ notes: [] }))
     await wrapper.findAll('.actions button')[1].trigger('click') // Clear Notes
@@ -91,7 +91,7 @@ describe('App hosting', () => {
       null,
       { 'Content-Type': 'application/json' },
     )
-    expect(wrapper.findAllComponents({ name: 'ClickCard' })).toHaveLength(0)
+    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(0)
   })
 
   it('ends the game and returns to the lobby', async () => {
