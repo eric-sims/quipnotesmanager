@@ -48,7 +48,7 @@
       </div>
 
       <p v-if="responses.length === 0" class="board-empty">
-        No notes yet. Press <strong>Get Notes</strong> to pull them in.
+        No notes yet. They'll appear here as players submit.
       </p>
 
       <div v-else class="board">
@@ -56,8 +56,6 @@
       </div>
 
       <div class="actions">
-        <button @click="getNotes" class="game-btn game-btn--primary">Get Notes</button>
-        <button @click="clearNotes" class="game-btn game-btn--ghost">Clear Notes</button>
         <button @click="endGame" class="game-btn game-btn--danger">End Game</button>
       </div>
     </section>
@@ -104,10 +102,12 @@ export default {
     } catch {
       this.code = "";
     }
-    // Restore a running game: re-sync the round from the server and (online)
-    // reopen the live event stream.
+    // Restore a running game: re-sync the round and note board from the
+    // server, and (online) reopen the live event stream that keeps both
+    // current from here on.
     if (this.code) {
       this.syncRound();
+      this.getNotes();
       this.openEvents();
     }
   },
@@ -297,28 +297,6 @@ export default {
         })
         .catch((error) => {
           alert(`Error fetching data: ${error.message}`);
-        });
-    },
-    clearNotes() {
-      if (!this.code) return;
-      apiRequest("DELETE", `/games/${this.code}/submitted-notes`, null, {
-        "Content-Type": "application/json",
-      })
-        .then((response) => {
-          if (response.status === 404) {
-            this.returnToLobby(
-              "That game no longer exists — the server may have restarted. Back to the lobby."
-            );
-            return;
-          }
-          if (!response.ok) {
-            alert(`Error clearing notes: ${response.status}`);
-            return;
-          }
-          this.responses = [];
-        })
-        .catch((error) => {
-          alert(`Error clearing notes: ${error.message}`);
         });
     },
     async copyInvite() {

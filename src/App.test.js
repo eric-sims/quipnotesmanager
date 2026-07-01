@@ -16,9 +16,14 @@ vi.mock('@/api', () => ({
   },
 }))
 
-// Stub the socket wrapper so App never opens a real WebSocket in tests.
+// Stub the socket wrapper so App never opens a real WebSocket in tests, but
+// capture the onEvent callback so tests can simulate pushed events.
+let socketOnEvent = null
 vi.mock('@/socket', () => ({
-  createGameSocket: vi.fn(() => ({ close: vi.fn() })),
+  createGameSocket: vi.fn((code, onEvent) => {
+    socketOnEvent = onEvent
+    return { close: vi.fn() }
+  }),
 }))
 
 // Stub the clipboard helper so Copy invite doesn't touch the real clipboard.
@@ -36,6 +41,7 @@ function okJson(data, status = 200) {
 beforeEach(() => {
   apiRequest.mockReset()
   isOffline = false
+  socketOnEvent = null
   window.localStorage.clear()
 })
 
@@ -66,11 +72,15 @@ describe('App lobby', () => {
 })
 
 describe('App hosting', () => {
-  it('fetches submitted notes for the current game and renders one card each', async () => {
+  it('fetches submitted notes automatically when a submission event arrives', async () => {
     const wrapper = await mountHosting('4821')
+    expect(typeof socketOnEvent).toBe('function')
+
+    // A round must be active for the "Answered" count to render.
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'A terrible name for a boat' })
 
     apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a', 'note b'] }))
-    await wrapper.find('.actions button').trigger('click') // Get Notes
+    socketOnEvent({ type: 'submission', count: 2, total: 3 })
     await flushPromises()
 
     expect(apiRequest).toHaveBeenLastCalledWith(
@@ -81,27 +91,24 @@ describe('App hosting', () => {
     )
     expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(2)
     expect(wrapper.text()).toContain('Number of Notes: 2')
+    expect(wrapper.text()).toContain('Answered: 2 / 3')
   })
 
-  it('clears the notes on Clear Notes', async () => {
-    const wrapper = await mountHosting('4821')
-
-    apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a'] }))
-    await wrapper.findAll('.actions button')[0].trigger('click') // Get Notes
-    await flushPromises()
-    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(1)
-
-    apiRequest.mockResolvedValueOnce(okJson({ notes: [] }))
-    await wrapper.findAll('.actions button')[1].trigger('click') // Clear Notes
+  it('re-fetches the round and note board when restoring a running game', async () => {
+    window.localStorage.setItem('quipnotes.manager.code', '4821')
+    apiRequest
+      .mockResolvedValueOnce(okJson({ round: 0, prompt: '' })) // syncRound
+      .mockResolvedValueOnce(okJson({ notes: ['note a'] })) // getNotes
+    const wrapper = mount(App)
     await flushPromises()
 
-    expect(apiRequest).toHaveBeenLastCalledWith(
-      'DELETE',
+    expect(apiRequest).toHaveBeenCalledWith(
+      'GET',
       '/games/4821/submitted-notes',
       null,
       { 'Content-Type': 'application/json' },
     )
-    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(0)
+    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(1)
   })
 
   it('ends the game and returns to the lobby', async () => {
@@ -109,7 +116,7 @@ describe('App hosting', () => {
     const wrapper = await mountHosting('4821')
 
     apiRequest.mockResolvedValueOnce(okJson({}, 200))
-    await wrapper.findAll('.actions button')[2].trigger('click') // End Game
+    await wrapper.find('.actions button').trigger('click') // End Game
     await flushPromises()
 
     expect(apiRequest).toHaveBeenLastCalledWith('DELETE', '/games/4821', null, {
@@ -120,12 +127,13 @@ describe('App hosting', () => {
     vi.unstubAllGlobals()
   })
 
-  it('returns to the lobby when Get Notes finds the game gone (404)', async () => {
+  it('returns to the lobby when the restore note fetch finds the game gone (404)', async () => {
     vi.stubGlobal('alert', vi.fn())
-    const wrapper = await mountHosting('4821')
-
-    apiRequest.mockResolvedValueOnce(okJson({ error: 'game 4821 not found' }, 404))
-    await wrapper.findAll('.actions button')[0].trigger('click') // Get Notes
+    window.localStorage.setItem('quipnotes.manager.code', '4821')
+    apiRequest
+      .mockResolvedValueOnce(okJson({ round: 0, prompt: '' })) // syncRound
+      .mockResolvedValueOnce(okJson({ error: 'game 4821 not found' }, 404)) // getNotes
+    const wrapper = mount(App)
     await flushPromises()
 
     expect(wrapper.find('.code-value').exists()).toBe(false)
@@ -140,7 +148,7 @@ describe('App hosting', () => {
     const wrapper = await mountHosting('4821')
 
     apiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'))
-    await wrapper.findAll('.actions button')[2].trigger('click') // End Game
+    await wrapper.find('.actions button').trigger('click') // End Game
     await flushPromises()
 
     expect(wrapper.find('.code-value').exists()).toBe(false)
