@@ -57,29 +57,6 @@ describe('GET /games/:code/submitted-notes', () => {
   })
 })
 
-describe('DELETE /games/:code/submitted-notes', () => {
-  it('clears the notes and persists the empty list', async () => {
-    const api = await freshApi()
-    const del = await api('DELETE', `/games/${SEED}/submitted-notes`)
-    expect(del.ok).toBe(true)
-    await expect(del.json()).resolves.toEqual({ notes: [] })
-
-    const after = await (await api('GET', `/games/${SEED}/submitted-notes`)).json()
-    expect(after.notes).toEqual([])
-  })
-
-  it('survives a reload via localStorage', async () => {
-    const api = await freshApi()
-    await api('DELETE', `/games/${SEED}/submitted-notes`)
-
-    // Re-import the module (fresh state) — it should load the cleared list.
-    vi.resetModules()
-    const reloaded = await freshApi()
-    const after = await (await reloaded('GET', `/games/${SEED}/submitted-notes`)).json()
-    expect(after.notes).toEqual([])
-  })
-})
-
 describe('DELETE /games/:code', () => {
   it('ends a game so its notes are no longer reachable', async () => {
     const api = await freshApi()

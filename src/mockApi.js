@@ -5,8 +5,7 @@
 //
 //   POST   /games                          -> { code }   (start a game)
 //   DELETE /games/:code                     -> 200        (end a game)
-//   GET    /games/:code/submitted-notes     -> { notes: [ ... ] }
-//   DELETE /games/:code/submitted-notes     -> { notes: [] }   (clears them)
+//   GET    /games/:code/submitted-notes     -> { notes: [ ... ] }  (cleared each round)
 //   POST   /games/:code/rounds              -> { round, prompt }  (draw prompt)
 //   GET    /games/:code/round               -> { round, prompt }
 //
@@ -189,11 +188,6 @@ export async function mockApiRequest(method, url) {
 
     if (method === "GET") {
       return jsonResponse({ notes: [...game.notes] })
-    }
-    if (method === "DELETE") {
-      game.notes = []
-      save()
-      return jsonResponse({ notes: [] })
     }
   }
 
