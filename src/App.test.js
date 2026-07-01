@@ -3,12 +3,22 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 // Mock the api module so App is tested against the contract, not the network.
 const apiRequest = vi.fn()
+const JSON_HEADERS = { 'Content-Type': 'application/json' }
 let isOffline = false
 vi.mock('@/api', () => ({
   apiRequest: (...args) => apiRequest(...args),
+  startRound: (code) =>
+    apiRequest('POST', `/games/${code}/rounds`, null, JSON_HEADERS),
+  getRound: (code) =>
+    apiRequest('GET', `/games/${code}/round`, null, JSON_HEADERS),
   get IS_OFFLINE() {
     return isOffline
   },
+}))
+
+// Stub the socket wrapper so App never opens a real WebSocket in tests.
+vi.mock('@/socket', () => ({
+  createGameSocket: vi.fn(() => ({ close: vi.fn() })),
 }))
 
 // Stub the clipboard helper so Copy invite doesn't touch the real clipboard.
@@ -136,6 +146,48 @@ describe('App hosting', () => {
     expect(wrapper.find('.code-value').exists()).toBe(false)
     expect(wrapper.text()).toContain('Start Game')
     expect(window.localStorage.getItem('quipnotes.manager.code')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('App rounds', () => {
+  it('shows the draw-prompt prompt before any round', async () => {
+    const wrapper = await mountHosting('4821')
+    expect(wrapper.findComponent({ name: 'PromptCard' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('Draw the first prompt')
+  })
+
+  it('draws a prompt and displays it in a PromptCard', async () => {
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockResolvedValueOnce(
+      okJson({ round: 1, prompt: 'A terrible name for a boat' }, 201),
+    )
+    await wrapper.find('.game-btn--xl').trigger('click') // Draw prompt
+    await flushPromises()
+
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      'POST',
+      '/games/4821/rounds',
+      null,
+      JSON_HEADERS,
+    )
+    const card = wrapper.findComponent({ name: 'PromptCard' })
+    expect(card.exists()).toBe(true)
+    expect(wrapper.text()).toContain('A terrible name for a boat')
+    expect(wrapper.text()).toContain('Round 1')
+  })
+
+  it('returns to the lobby when drawing a prompt finds the game gone (404)', async () => {
+    vi.stubGlobal('alert', vi.fn())
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockResolvedValueOnce(okJson({ error: 'not found' }, 404))
+    await wrapper.find('.game-btn--xl').trigger('click') // Draw prompt
+    await flushPromises()
+
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Start Game')
     vi.unstubAllGlobals()
   })
 })

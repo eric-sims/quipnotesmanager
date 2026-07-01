@@ -7,6 +7,8 @@
 //   DELETE /games/:code                     -> 200        (end a game)
 //   GET    /games/:code/submitted-notes     -> { notes: [ ... ] }
 //   DELETE /games/:code/submitted-notes     -> { notes: [] }   (clears them)
+//   POST   /games/:code/rounds              -> { round, prompt }  (draw prompt)
+//   GET    /games/:code/round               -> { round, prompt }
 //
 // State is persisted to localStorage so games survive page reloads, and one
 // sample game (code "1234") is seeded with a few ransom notes so the manager
@@ -19,11 +21,58 @@ const SEED_NOTES = [
   "return my tiny dragon and we forget the forbidden noodle",
 ]
 
+// A small built-in prompt bank so offline hosting can draw prompts. Each game
+// gets its own shuffled copy (a "deck") so rounds vary per game.
+const PROMPT_BANK = [
+  "The worst possible thing to say on a first date",
+  "A rejected slogan for an energy drink",
+  "What the villain monologues about before losing",
+  "A terrible name for a boat",
+  "What your pet is really thinking about you",
+  "The last text message before the world ended",
+  "A motivational poster nobody asked for",
+  "What the fortune cookie should have said",
+  "A newspaper headline from the year 3000",
+  "The title of your unauthorized autobiography",
+]
+
 const SEED_CODE = "1234"
 const STORAGE_KEY = "quipnotes.manager.mock.v2"
 
-// games: { [code]: { notes: string[] } }
-let games = { [SEED_CODE]: { notes: [...SEED_NOTES] } }
+function shuffled(list) {
+  const copy = [...list]
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
+
+// games: { [code]: { notes: string[], deck: string[], cursor: number,
+//                    round: number, prompt: string } }
+let games = {
+  [SEED_CODE]: {
+    notes: [...SEED_NOTES],
+    deck: shuffled(PROMPT_BANK),
+    cursor: 0,
+    round: 0,
+    prompt: "",
+  },
+}
+
+// Draw the next prompt off a game's deck, reshuffling on exhaustion so it never
+// runs out. Mirrors the server's StartRound.
+function drawNextPrompt(game) {
+  if (game.cursor >= game.deck.length) {
+    game.deck = shuffled(PROMPT_BANK)
+    game.cursor = 0
+  }
+  game.prompt = game.deck[game.cursor]
+  game.cursor += 1
+  game.round += 1
+  game.notes = []
+  return { round: game.round, prompt: game.prompt }
+}
 
 function storage() {
   try {
@@ -81,6 +130,17 @@ function newCode() {
 // Match "/games/:code" and "/games/:code/submitted-notes".
 const NOTES_RE = /^\/games\/(\d{4})\/submitted-notes$/
 const GAME_RE = /^\/games\/(\d{4})$/
+const ROUNDS_RE = /^\/games\/(\d{4})\/rounds$/
+const ROUND_RE = /^\/games\/(\d{4})\/round$/
+
+// Backfill round fields on games persisted before rounds existed.
+function withRoundFields(game) {
+  if (!Array.isArray(game.deck)) game.deck = shuffled(PROMPT_BANK)
+  if (typeof game.cursor !== "number") game.cursor = 0
+  if (typeof game.round !== "number") game.round = 0
+  if (typeof game.prompt !== "string") game.prompt = ""
+  return game
+}
 
 // Drop-in replacement for api.js#apiRequest's network call. The manager's host
 // endpoints take no request body, so it is accepted for signature parity only.
@@ -88,9 +148,36 @@ export async function mockApiRequest(method, url) {
   // Start a game.
   if (method === "POST" && url === "/games") {
     const code = newCode()
-    games[code] = { notes: [] }
+    games[code] = {
+      notes: [],
+      deck: shuffled(PROMPT_BANK),
+      cursor: 0,
+      round: 0,
+      prompt: "",
+    }
     save()
     return jsonResponse({ code }, 201)
+  }
+
+  // Draw the next prompt (start a round).
+  const roundsMatch = url.match(ROUNDS_RE)
+  if (roundsMatch && method === "POST") {
+    const code = roundsMatch[1]
+    const game = games[code]
+    if (!game) return jsonResponse({ error: `game ${code} not found` }, 404)
+    const result = drawNextPrompt(withRoundFields(game))
+    save()
+    return jsonResponse(result, 201)
+  }
+
+  // Current round.
+  const roundMatch = url.match(ROUND_RE)
+  if (roundMatch && method === "GET") {
+    const code = roundMatch[1]
+    const game = games[code]
+    if (!game) return jsonResponse({ error: `game ${code} not found` }, 404)
+    withRoundFields(game)
+    return jsonResponse({ round: game.round, prompt: game.prompt })
   }
 
   // Read / clear a game's notes.
