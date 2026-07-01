@@ -91,6 +91,52 @@ describe('DELETE /games/:code', () => {
   })
 })
 
+describe('rounds', () => {
+  it('starts at round 0 with no prompt', async () => {
+    const api = await freshApi()
+    const { code } = await (await api('POST', '/games')).json()
+    const data = await (await api('GET', `/games/${code}/round`)).json()
+    expect(data).toEqual({ round: 0, prompt: '' })
+  })
+
+  it('draws a prompt and advances the round', async () => {
+    const api = await freshApi()
+    const { code } = await (await api('POST', '/games')).json()
+
+    const res = await api('POST', `/games/${code}/rounds`)
+    expect(res.status).toBe(201)
+    const drawn = await res.json()
+    expect(drawn.round).toBe(1)
+    expect(typeof drawn.prompt).toBe('string')
+    expect(drawn.prompt.length).toBeGreaterThan(0)
+
+    // GET reflects the drawn round.
+    const current = await (await api('GET', `/games/${code}/round`)).json()
+    expect(current).toEqual(drawn)
+
+    // A second draw advances to round 2.
+    const second = await (await api('POST', `/games/${code}/rounds`)).json()
+    expect(second.round).toBe(2)
+  })
+
+  it('clears submitted notes when a new round starts', async () => {
+    const api = await freshApi()
+    // The seeded game starts with notes; drawing a prompt clears them.
+    const before = await (await api('GET', `/games/${SEED}/submitted-notes`)).json()
+    expect(before.notes.length).toBeGreaterThan(0)
+
+    await api('POST', `/games/${SEED}/rounds`)
+    const after = await (await api('GET', `/games/${SEED}/submitted-notes`)).json()
+    expect(after.notes).toEqual([])
+  })
+
+  it('404s drawing a prompt for an unknown game', async () => {
+    const api = await freshApi()
+    const res = await api('POST', '/games/9999/rounds')
+    expect(res.status).toBe(404)
+  })
+})
+
 describe('unknown routes', () => {
   it('returns a 404 response', async () => {
     const api = await freshApi()

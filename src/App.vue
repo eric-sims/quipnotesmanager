@@ -20,6 +20,17 @@
 
     <!-- Hosting: a game is running -->
     <section v-else class="hosting">
+      <PromptCard v-if="round > 0" :round="round" :prompt="prompt" />
+      <p v-else class="prompt-empty">Draw the first prompt to begin the round.</p>
+
+      <button
+        @click="drawPrompt"
+        class="game-btn game-btn--primary game-btn--xl"
+        :disabled="drawing"
+      >
+        {{ drawing ? 'Drawing…' : round > 0 ? 'Next prompt' : 'Draw prompt' }}
+      </button>
+
       <div class="code-card">
         <span class="code-label">Join at the code</span>
         <span class="code-value">{{ code }}</span>
@@ -31,6 +42,9 @@
       <div class="board-head">
         <h2 class="board-title">Submitted notes</h2>
         <span class="note-count">Number of Notes: {{ responses.length }}</span>
+        <span v-if="round > 0" class="note-count">
+          Answered: {{ submissionCount }} / {{ playerCount }}
+        </span>
       </div>
 
       <p v-if="responses.length === 0" class="board-empty">
@@ -52,15 +66,20 @@
 
 <script>
 import NoteSlate from "@/components/NoteSlate.vue";
-import { apiRequest, IS_OFFLINE } from "@/api";
+import PromptCard from "@/components/PromptCard.vue";
+import { apiRequest, startRound, getRound, IS_OFFLINE } from "@/api";
+import { createGameSocket } from "@/socket";
 import { copyText, shareMessage } from "@/clipboard";
 
 const CODE_KEY = "quipnotes.manager.code";
+const ROUND_KEY = "quipnotes.manager.round";
+const PROMPT_KEY = "quipnotes.manager.prompt";
 
 export default {
   name: "App",
   components: {
     NoteSlate,
+    PromptCard,
   },
   data() {
     return {
@@ -68,15 +87,32 @@ export default {
       responses: [],
       isOffline: IS_OFFLINE,
       busy: false,
+      drawing: false,
       copyLabel: "Copy invite",
+      // Round / prompt state.
+      round: 0,
+      prompt: "",
+      submissionCount: 0,
+      playerCount: 0,
     };
   },
   mounted() {
     try {
       this.code = window.localStorage.getItem(CODE_KEY) || "";
+      this.round = Number(window.localStorage.getItem(ROUND_KEY)) || 0;
+      this.prompt = window.localStorage.getItem(PROMPT_KEY) || "";
     } catch {
       this.code = "";
     }
+    // Restore a running game: re-sync the round from the server and (online)
+    // reopen the live event stream.
+    if (this.code) {
+      this.syncRound();
+      this.openEvents();
+    }
+  },
+  beforeUnmount() {
+    this.closeEvents();
   },
   methods: {
     persistCode() {
@@ -90,14 +126,33 @@ export default {
         // localStorage can throw in private-mode / sandboxed contexts; ignore.
       }
     },
+    persistRound() {
+      try {
+        if (this.round > 0) {
+          window.localStorage.setItem(ROUND_KEY, String(this.round));
+          window.localStorage.setItem(PROMPT_KEY, this.prompt);
+        } else {
+          window.localStorage.removeItem(ROUND_KEY);
+          window.localStorage.removeItem(PROMPT_KEY);
+        }
+      } catch {
+        // localStorage can throw in private-mode / sandboxed contexts; ignore.
+      }
+    },
     // Drop the active game and go back to the lobby. Used both when the host
     // ends a game and when the server tells us the game is gone (e.g. it
     // restarted and wiped its in-memory games), so the host is never stranded
     // on a dead code.
     returnToLobby(message) {
+      this.closeEvents();
       this.code = "";
       this.responses = [];
+      this.round = 0;
+      this.prompt = "";
+      this.submissionCount = 0;
+      this.playerCount = 0;
       this.persistCode();
+      this.persistRound();
       if (message) alert(message);
     },
     async startGame() {
@@ -111,11 +166,90 @@ export default {
         const data = await res.json();
         this.code = data.code;
         this.responses = [];
+        this.round = 0;
+        this.prompt = "";
+        this.submissionCount = 0;
+        this.playerCount = 0;
         this.persistCode();
+        this.persistRound();
+        this.openEvents();
       } catch (error) {
         alert(`Could not start game: ${error.message}`);
       } finally {
         this.busy = false;
+      }
+    },
+    // Draw the next prompt to start a round. The server clears the previous
+    // round's notes, so we clear the board locally too.
+    async drawPrompt() {
+      if (!this.code || this.drawing) return;
+      this.drawing = true;
+      try {
+        const res = await startRound(this.code);
+        if (res.status === 404) {
+          this.returnToLobby(
+            "That game no longer exists — the server may have restarted. Back to the lobby."
+          );
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
+        const data = await res.json();
+        this.round = data.round;
+        this.prompt = data.prompt;
+        this.responses = [];
+        this.submissionCount = 0;
+        this.persistRound();
+      } catch (error) {
+        alert(`Could not draw a prompt: ${error.message}`);
+      } finally {
+        this.drawing = false;
+      }
+    },
+    // Re-sync the current round from the server (used on restore/reconnect).
+    async syncRound() {
+      if (!this.code) return;
+      try {
+        const res = await getRound(this.code);
+        if (!res.ok) return;
+        const data = await res.json();
+        this.round = data.round;
+        this.prompt = data.prompt;
+        this.persistRound();
+      } catch {
+        // Non-fatal: the poll/socket or a later action will re-sync.
+      }
+    },
+    // Open the live event stream (online only). Offline mode has no server; the
+    // host drives rounds directly from drawPrompt's response.
+    openEvents() {
+      if (IS_OFFLINE || this.socket) return;
+      this.socket = createGameSocket(this.code, (evt) => this.handleEvent(evt));
+    },
+    closeEvents() {
+      if (this.socket) {
+        this.socket.close();
+        this.socket = null;
+      }
+    },
+    handleEvent(evt) {
+      if (!evt || !evt.type) return;
+      switch (evt.type) {
+        case "round_started":
+          this.round = evt.round;
+          this.prompt = evt.prompt;
+          this.responses = [];
+          this.submissionCount = 0;
+          this.persistRound();
+          break;
+        case "submission":
+          this.submissionCount = evt.count;
+          this.playerCount = evt.total;
+          // Pull the latest board so notes appear as they come in.
+          this.getNotes();
+          break;
+        case "game_ended":
+          this.returnToLobby();
+          break;
       }
     },
     async endGame() {
@@ -402,6 +536,12 @@ body {
 .board-empty {
   margin: 0;
   font-size: clamp(1rem, 1.8vw, 1.3rem);
+  color: var(--color-muted);
+}
+
+.prompt-empty {
+  margin: 0;
+  font-size: clamp(1.1rem, 2vw, 1.5rem);
   color: var(--color-muted);
 }
 
