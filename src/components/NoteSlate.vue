@@ -187,7 +187,7 @@ export default {
   flex-direction: column;
   /* Clusters sit clearly apart so a line break reads as a distinct expression,
      not just another wrapped row within a long cluster. */
-  gap: var(--space-5);
+  gap: var(--space-6);
   align-items: center;
   justify-content: center;
   width: 100%;
