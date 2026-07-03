@@ -5,6 +5,7 @@
 // Server -> client events are JSON objects: { type, ... }:
 //   round_started { round, prompt }
 //   submission    { round, count, total }
+//   players       { players: [{ id }] }   (roster on join/leave + connect snapshot)
 //   game_ended    {}
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';

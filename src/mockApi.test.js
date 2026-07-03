@@ -57,6 +57,39 @@ describe('GET /games/:code/submitted-notes', () => {
   })
 })
 
+describe('GET /games/:code/players', () => {
+  it('returns the seeded roster as { id } objects for the sample game', async () => {
+    const api = await freshApi()
+    const res = await api('GET', `/games/${SEED}/players`)
+    expect(res.ok).toBe(true)
+    const data = await res.json()
+    expect(Array.isArray(data.players)).toBe(true)
+    expect(data.players.length).toBeGreaterThan(0)
+    expect(data.players[0]).toHaveProperty('id')
+  })
+
+  it('a freshly started game has an empty roster', async () => {
+    const api = await freshApi()
+    const { code } = await (await api('POST', '/games')).json()
+    const data = await (await api('GET', `/games/${code}/players`)).json()
+    expect(data.players).toEqual([])
+  })
+
+  it('returns a copy, not the internal array', async () => {
+    const api = await freshApi()
+    const data = await (await api('GET', `/games/${SEED}/players`)).json()
+    data.players.push({ id: 'mutated' })
+    const again = await (await api('GET', `/games/${SEED}/players`)).json()
+    expect(again.players.map((p) => p.id)).not.toContain('mutated')
+  })
+
+  it('404s for an unknown game code', async () => {
+    const api = await freshApi()
+    const res = await api('GET', '/games/9999/players')
+    expect(res.status).toBe(404)
+  })
+})
+
 describe('DELETE /games/:code', () => {
   it('ends a game so its notes are no longer reachable', async () => {
     const api = await freshApi()

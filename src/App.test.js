@@ -11,6 +11,8 @@ vi.mock('@/api', () => ({
     apiRequest('POST', `/games/${code}/rounds`, null, JSON_HEADERS),
   getRound: (code) =>
     apiRequest('GET', `/games/${code}/round`, null, JSON_HEADERS),
+  getPlayers: (code) =>
+    apiRequest('GET', `/games/${code}/players`, null, JSON_HEADERS),
   get IS_OFFLINE() {
     return isOffline
   },
@@ -76,11 +78,13 @@ describe('App hosting', () => {
     const wrapper = await mountHosting('4821')
     expect(typeof socketOnEvent).toBe('function')
 
-    // A round must be active for the "Answered" count to render.
+    // A round must be active for the "Answered" count / note board to render.
     socketOnEvent({ type: 'round_started', round: 1, prompt: 'A terrible name for a boat' })
+    // The roster (and thus the "Answered" total) comes from a players event.
+    socketOnEvent({ type: 'players', players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] })
 
     apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a', 'note b'] }))
-    socketOnEvent({ type: 'submission', count: 2, total: 3 })
+    socketOnEvent({ type: 'submission', count: 2 })
     await flushPromises()
 
     expect(apiRequest).toHaveBeenLastCalledWith(
@@ -94,11 +98,12 @@ describe('App hosting', () => {
     expect(wrapper.text()).toContain('Answered: 2 / 3')
   })
 
-  it('re-fetches the round and note board when restoring a running game', async () => {
+  it('re-fetches the round, note board, and roster when restoring a running game', async () => {
     window.localStorage.setItem('quipnotes.manager.code', '4821')
     apiRequest
-      .mockResolvedValueOnce(okJson({ round: 0, prompt: '' })) // syncRound
+      .mockResolvedValueOnce(okJson({ round: 1, prompt: 'A boat' })) // syncRound
       .mockResolvedValueOnce(okJson({ notes: ['note a'] })) // getNotes
+      .mockResolvedValueOnce(okJson({ players: [{ id: 'Ada' }] })) // fetchPlayers
     const wrapper = mount(App)
     await flushPromises()
 
@@ -108,7 +113,39 @@ describe('App hosting', () => {
       null,
       { 'Content-Type': 'application/json' },
     )
+    expect(apiRequest).toHaveBeenCalledWith(
+      'GET',
+      '/games/4821/players',
+      null,
+      { 'Content-Type': 'application/json' },
+    )
     expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(1)
+    expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(true)
+    expect(wrapper.text()).toContain('Ada')
+  })
+
+  it('shows the live roster before any note, and shrinks the code once a round starts', async () => {
+    const wrapper = await mountHosting('4821')
+
+    // Waiting state: giant code hero (no corner modifier), no roster yet.
+    expect(wrapper.find('.code-card--corner').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(false)
+    expect(wrapper.text()).toContain('Waiting for players')
+
+    // A player joins — the roster appears while the code is still the hero.
+    socketOnEvent({ type: 'players', players: [{ id: 'Ada' }, { id: 'Grace' }] })
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(true)
+    expect(wrapper.text()).toContain('Ada')
+    expect(wrapper.text()).toContain('Grace')
+    expect(wrapper.find('.code-card--corner').exists()).toBe(false)
+
+    // Drawing the first prompt shrinks the code to the corner.
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'A boat' })
+    await flushPromises()
+    expect(wrapper.find('.code-card--corner').exists()).toBe(true)
+    // Roster stays visible during the round.
+    expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(true)
   })
 
   it('ends the game and returns to the lobby', async () => {

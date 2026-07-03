@@ -39,3 +39,9 @@ export function startRound(code) {
 export function getRound(code) {
     return apiRequest('GET', `/games/${code}/round`, null, JSON_HEADERS);
 }
+
+// Current roster for a game. 200 -> { players: [{ id }] }. Used to restore the
+// player list on mount/reconnect; live updates arrive via the `players` event.
+export function getPlayers(code) {
+    return apiRequest('GET', `/games/${code}/players`, null, JSON_HEADERS);
+}
