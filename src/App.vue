@@ -85,7 +85,11 @@
         </p>
 
         <div v-else class="board">
-          <NoteSlate v-for="resp in responses" :key="resp" :content="resp" />
+          <NoteSlate
+            v-for="(resp, i) in responses"
+            :key="i"
+            :tokens="resp"
+          />
         </div>
       </template>
 

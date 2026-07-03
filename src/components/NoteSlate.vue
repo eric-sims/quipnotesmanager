@@ -4,7 +4,7 @@
     class="slate"
     :class="{ 'slate--flipped': revealed }"
     :aria-pressed="revealed"
-    :aria-label="revealed ? content : 'Hidden note — click to reveal'"
+    :aria-label="revealed ? ariaText : 'Hidden note — click to reveal'"
     @click="toggleReveal"
   >
     <span class="slate__inner">
@@ -13,16 +13,25 @@
         <span class="slate__hint">Click to reveal</span>
       </span>
 
-      <!-- Back: the note, laid out as magnetic word tiles on the slate. -->
+      <!-- Back: the note, laid out as magnetic word tiles on the slate. Each
+           cluster the player separated with a line break is its own row, the
+           way tiles spaced apart on a magnetic slate read as distinct
+           expressions. -->
       <span class="slate__face slate__face--back">
         <span class="slate__note">
           <span
-            v-for="(word, i) in words"
-            :key="i"
-            class="magnet"
-            :style="{ '--rot': rotations[i] + 'deg' }"
-            >{{ word }}</span
+            v-for="(line, li) in lines"
+            :key="li"
+            class="slate__line"
           >
+            <span
+              v-for="word in line"
+              :key="word.key"
+              class="magnet"
+              :style="{ '--rot': word.rot + 'deg' }"
+              >{{ word.text }}</span
+            >
+          </span>
         </span>
       </span>
     </span>
@@ -30,11 +39,15 @@
 </template>
 
 <script>
+import { parseTile, isBreak } from '../tiles.js';
+
 export default {
   name: 'NoteSlate',
   props: {
-    content: {
-      type: String,
+    // The note as its ordered token list: tile keys ("42|banana") plus
+    // BREAK_TILE markers between clusters.
+    tokens: {
+      type: Array,
       required: true,
     },
   },
@@ -44,14 +57,30 @@ export default {
     };
   },
   computed: {
-    // Each word becomes its own magnetic tile, like the real game.
-    words() {
-      return this.content.split(/\s+/).filter(Boolean);
+    // Split the token list into clusters on each break, then parse every tile
+    // into a magnet. A running index drives a stable, gentle hand-placed jitter
+    // (deterministic so it doesn't twitch on re-render) that continues across
+    // lines, so the whole note keeps one consistent scatter.
+    lines() {
+      const out = [];
+      let current = [];
+      let i = 0;
+      for (const token of this.tokens) {
+        if (isBreak(token)) {
+          if (current.length) out.push(current);
+          current = [];
+          continue;
+        }
+        const { word } = parseTile(token);
+        current.push({ key: i, text: word, rot: ((i * 37) % 7) - 3 });
+        i += 1;
+      }
+      if (current.length) out.push(current);
+      return out;
     },
-    // A stable, gentle hand-placed jitter per tile (deterministic so it
-    // doesn't twitch on re-render).
-    rotations() {
-      return this.words.map((_, i) => ((i * 37) % 7) - 3);
+    // Screen-reader text: words joined by spaces, clusters by a pause.
+    ariaText() {
+      return this.lines.map((line) => line.map((w) => w.text).join(' ')).join('. ');
     },
   },
   methods: {
@@ -155,8 +184,23 @@ export default {
 
 .slate__note {
   display: flex;
+  flex-direction: column;
+  /* Clusters sit clearly apart so a line break reads as a distinct expression,
+     not just another wrapped row within a long cluster. */
+  gap: var(--space-6);
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+/* One cluster of tiles (an "expression"): its own centered row of magnets. A
+   long cluster wraps, but with a tight row-gap so its wrapped rows stay visibly
+   closer together than the space between clusters. */
+.slate__line {
+  display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
   align-items: center;
   justify-content: center;
 }

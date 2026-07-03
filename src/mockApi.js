@@ -5,7 +5,7 @@
 //
 //   POST   /games                          -> { code }   (start a game)
 //   DELETE /games/:code                     -> 200        (end a game)
-//   GET    /games/:code/submitted-notes     -> { notes: [ ... ] }  (cleared each round)
+//   GET    /games/:code/submitted-notes     -> { notes: [ [token,...], ... ] }  (cleared each round)
 //   POST   /games/:code/rounds              -> { round, prompt }  (draw prompt)
 //   GET    /games/:code/round               -> { round, prompt }
 //   GET    /games/:code/players             -> { players: [{ id }] }  (roster)
@@ -19,11 +19,25 @@
 // via GET /players (mirroring how offline polls GET /round). The sample game is
 // seeded with a couple of players so offline hosting still shows a roster.
 
+import { BREAK_TILE } from "./tiles.js"
+
+// Each note is its ordered token list ("<id>|<word>" tiles plus BREAK_TILE line
+// breaks), the same shape the server returns. tokenize() builds one from a
+// sentence, treating a lone "/" as a line break so the seed reads naturally and
+// one note demonstrates the host's stacked-line rendering.
+function tokenize(sentence) {
+  let id = 0
+  return sentence
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => (word === "/" ? BREAK_TILE : `${id++}|${word}`))
+}
+
 const SEED_NOTES = [
-  "the wizard demands your golden cheese before midnight",
-  "i never ate the suspicious espresso",
-  "nobody whispers but the haunted robot screams now",
-  "return my tiny dragon and we forget the forbidden noodle",
+  tokenize("the wizard demands your golden cheese / before midnight"),
+  tokenize("i never ate the suspicious espresso"),
+  tokenize("nobody whispers / but the haunted robot / screams now"),
+  tokenize("return my tiny dragon and we forget the forbidden noodle"),
 ]
 
 // Sample roster for the seeded game so offline hosting shows joined players.
@@ -56,7 +70,7 @@ function shuffled(list) {
   return copy
 }
 
-// games: { [code]: { notes: string[], deck: string[], cursor: number,
+// games: { [code]: { notes: string[][], deck: string[], cursor: number,
 //                    round: number, prompt: string, players: {id}[] } }
 let games = {
   [SEED_CODE]: {
