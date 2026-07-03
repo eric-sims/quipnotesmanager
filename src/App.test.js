@@ -83,7 +83,9 @@ describe('App hosting', () => {
     // The roster (and thus the "Answered" total) comes from a players event.
     socketOnEvent({ type: 'players', players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] })
 
-    apiRequest.mockResolvedValueOnce(okJson({ notes: ['note a', 'note b'] }))
+    apiRequest.mockResolvedValueOnce(
+      okJson({ notes: [['0|note', '1|a'], ['0|note', '1|b']] }),
+    )
     socketOnEvent({ type: 'submission', count: 2 })
     await flushPromises()
 
@@ -102,7 +104,7 @@ describe('App hosting', () => {
     window.localStorage.setItem('quipnotes.manager.code', '4821')
     apiRequest
       .mockResolvedValueOnce(okJson({ round: 1, prompt: 'A boat' })) // syncRound
-      .mockResolvedValueOnce(okJson({ notes: ['note a'] })) // getNotes
+      .mockResolvedValueOnce(okJson({ notes: [['0|note', '1|a']] })) // getNotes
       .mockResolvedValueOnce(okJson({ players: [{ id: 'Ada' }] })) // fetchPlayers
     const wrapper = mount(App)
     await flushPromises()
