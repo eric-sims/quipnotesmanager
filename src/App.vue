@@ -20,40 +20,74 @@
 
     <!-- Hosting: a game is running -->
     <section v-else class="hosting">
-      <PromptCard v-if="round > 0" :round="round" :prompt="prompt" />
-      <p v-else class="prompt-empty">Draw the first prompt to begin the round.</p>
-
-      <button
-        @click="drawPrompt"
-        class="game-btn game-btn--primary game-btn--xl"
-        :disabled="drawing"
-      >
-        {{ drawing ? 'Drawing…' : round > 0 ? 'Next prompt' : 'Draw prompt' }}
-      </button>
-
-      <div class="code-card">
+      <!-- Invite code: a giant centered hero while waiting, then shrinks and
+           pins to the corner once the first prompt is drawn (round > 0), so the
+           prompt and notes take center stage. -->
+      <div class="code-card" :class="{ 'code-card--corner': round > 0 }">
         <span class="code-label">Join at the code</span>
         <span class="code-value">{{ code }}</span>
-        <button @click="copyInvite" class="game-btn game-btn--ghost">
+        <button
+          @click="copyInvite"
+          class="game-btn game-btn--ghost"
+          :class="{ 'game-btn--sm': round > 0 }"
+        >
           {{ copyLabel }}
         </button>
       </div>
 
-      <div class="board-head">
-        <h2 class="board-title">Submitted notes</h2>
-        <span class="note-count">Number of Notes: {{ responses.length }}</span>
-        <span v-if="round > 0" class="note-count">
-          Answered: {{ submissionCount }} / {{ playerCount }}
-        </span>
-      </div>
+      <!-- Waiting room (no prompt drawn yet): the roster is the focus. Big
+           "Draw prompt" button, prominent roster. -->
+      <template v-if="round === 0">
+        <p class="waiting-lede">Waiting for players…</p>
+        <p class="prompt-empty">Draw the first prompt to begin the round.</p>
 
-      <p v-if="responses.length === 0" class="board-empty">
-        No notes yet. They'll appear here as players submit.
-      </p>
+        <button
+          @click="drawPrompt"
+          class="game-btn game-btn--primary game-btn--xl"
+          :disabled="drawing"
+        >
+          {{ drawing ? 'Drawing…' : 'Draw prompt' }}
+        </button>
 
-      <div v-else class="board">
-        <NoteSlate v-for="resp in responses" :key="resp" :content="resp" />
-      </div>
+        <PlayerRoster v-if="players.length" :players="players" />
+      </template>
+
+      <!-- Active round: prompt + notes take center stage; the roster tucks to
+           the side as a compact panel, and the draw button is normal-sized. -->
+      <template v-else>
+        <PromptCard :round="round" :prompt="prompt" />
+
+        <button
+          @click="drawPrompt"
+          class="game-btn game-btn--primary"
+          :disabled="drawing"
+        >
+          {{ drawing ? 'Drawing…' : 'Next prompt' }}
+        </button>
+
+        <PlayerRoster
+          v-if="players.length"
+          :players="players"
+          compact
+          class="roster--corner"
+        />
+
+        <div class="board-head">
+          <h2 class="board-title">Submitted notes</h2>
+          <span class="note-count">Number of Notes: {{ responses.length }}</span>
+          <span class="note-count">
+            Answered: {{ submissionCount }} / {{ players.length }}
+          </span>
+        </div>
+
+        <p v-if="responses.length === 0" class="board-empty">
+          No notes yet. They'll appear here as players submit.
+        </p>
+
+        <div v-else class="board">
+          <NoteSlate v-for="resp in responses" :key="resp" :content="resp" />
+        </div>
+      </template>
 
       <div class="actions">
         <button @click="endGame" class="game-btn game-btn--danger">End Game</button>
@@ -65,7 +99,8 @@
 <script>
 import NoteSlate from "@/components/NoteSlate.vue";
 import PromptCard from "@/components/PromptCard.vue";
-import { apiRequest, startRound, getRound, IS_OFFLINE } from "@/api";
+import PlayerRoster from "@/components/PlayerRoster.vue";
+import { apiRequest, startRound, getRound, getPlayers, IS_OFFLINE } from "@/api";
 import { createGameSocket } from "@/socket";
 import { copyText, shareMessage } from "@/clipboard";
 
@@ -78,6 +113,7 @@ export default {
   components: {
     NoteSlate,
     PromptCard,
+    PlayerRoster,
   },
   data() {
     return {
@@ -91,7 +127,9 @@ export default {
       round: 0,
       prompt: "",
       submissionCount: 0,
-      playerCount: 0,
+      // Roster of joined players ({ id } objects, scoring-ready). Fed by the
+      // `players` event + snapshot online, and by fetchPlayers on mount/restore.
+      players: [],
     };
   },
   mounted() {
@@ -108,6 +146,7 @@ export default {
     if (this.code) {
       this.syncRound();
       this.getNotes();
+      this.fetchPlayers();
       this.openEvents();
     }
   },
@@ -150,7 +189,7 @@ export default {
       this.round = 0;
       this.prompt = "";
       this.submissionCount = 0;
-      this.playerCount = 0;
+      this.players = [];
       this.persistCode();
       this.persistRound();
       if (message) alert(message);
@@ -169,9 +208,10 @@ export default {
         this.round = 0;
         this.prompt = "";
         this.submissionCount = 0;
-        this.playerCount = 0;
+        this.players = [];
         this.persistCode();
         this.persistRound();
+        this.fetchPlayers();
         this.openEvents();
       } catch (error) {
         alert(`Could not start game: ${error.message}`);
@@ -219,6 +259,20 @@ export default {
         // Non-fatal: the poll/socket or a later action will re-sync.
       }
     },
+    // Fetch the roster from the server (used on mount/restore and after start).
+    // Online, live updates then arrive via the `players` event; offline this is
+    // the only source (no socket), matching how offline polls the round.
+    async fetchPlayers() {
+      if (!this.code) return;
+      try {
+        const res = await getPlayers(this.code);
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        this.players = data.players || [];
+      } catch {
+        // Non-fatal: the socket snapshot (online) or a later fetch will re-sync.
+      }
+    },
     // Open the live event stream (online only). Offline mode has no server; the
     // host drives rounds directly from drawPrompt's response.
     openEvents() {
@@ -243,9 +297,12 @@ export default {
           break;
         case "submission":
           this.submissionCount = evt.count;
-          this.playerCount = evt.total;
           // Pull the latest board so notes appear as they come in.
           this.getNotes();
+          break;
+        case "players":
+          // Live roster (join/leave) + the connect snapshot.
+          this.players = evt.players || [];
           break;
         case "game_ended":
           this.returnToLobby();
@@ -473,6 +530,22 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
+  transition: padding 0.35s ease, max-width 0.35s ease;
+}
+
+/* Once a round is live the code steps aside: it shrinks and pins to the
+   top-right corner so the prompt and notes own the center of the screen. */
+.code-card--corner {
+  position: fixed;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 20;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  width: auto;
+  max-width: none;
+  padding: var(--space-2) var(--space-3);
 }
 
 .code-label {
@@ -482,6 +555,13 @@ body {
   color: var(--color-muted);
 }
 
+/* In the corner the verbose label is dropped so the badge stays compact and
+   clears the centered masthead title; the accent code + Copy button read on
+   their own. */
+.code-card--corner .code-label {
+  display: none;
+}
+
 .code-value {
   font-family: var(--font-tile);
   font-size: clamp(4rem, 14vw, 9rem);
@@ -489,6 +569,40 @@ body {
   line-height: 1;
   letter-spacing: 0.12em;
   color: var(--color-accent);
+  transition: font-size 0.35s ease;
+}
+
+.code-card--corner .code-value {
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  letter-spacing: 0.08em;
+}
+
+/* The "Waiting for players…" lede shown above the code while no round is live. */
+.waiting-lede {
+  margin: 0;
+  font-size: clamp(1.2rem, 2.4vw, 1.8rem);
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+/* During a round the roster becomes a compact scoreboard pinned to the top-left
+   corner — mirroring the code badge in the top-right. On wide host screens the
+   centered content (max 900px) leaves room in the margins for it. On narrower
+   screens, where a fixed panel would collide with the prompt, it falls back to
+   sitting inline at the left. */
+.roster--corner {
+  align-self: flex-start;
+}
+
+@media (min-width: 1000px) {
+  .roster--corner {
+    position: fixed;
+    top: var(--space-4);
+    left: var(--space-4);
+    z-index: 20;
+    max-height: calc(100vh - 2 * var(--space-4));
+    overflow-y: auto;
+  }
 }
 
 .board-head {
@@ -556,6 +670,13 @@ body {
   min-height: 72px;
   padding: var(--space-4) var(--space-6);
   font-size: 1.5rem;
+}
+
+/* Compact button for the shrunk corner code card. */
+.game-btn--sm {
+  min-height: 34px;
+  padding: var(--space-1) var(--space-3);
+  font-size: 0.9rem;
 }
 
 .game-btn:active:not(:disabled) {

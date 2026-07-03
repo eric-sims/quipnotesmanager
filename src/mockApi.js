@@ -8,10 +8,16 @@
 //   GET    /games/:code/submitted-notes     -> { notes: [ ... ] }  (cleared each round)
 //   POST   /games/:code/rounds              -> { round, prompt }  (draw prompt)
 //   GET    /games/:code/round               -> { round, prompt }
+//   GET    /games/:code/players             -> { players: [{ id }] }  (roster)
 //
 // State is persisted to localStorage so games survive page reloads, and one
 // sample game (code "1234") is seeded with a few ransom notes so the manager
 // has something to reveal in offline mode.
+//
+// Offline has no WebSocket, and the player/manager mocks are separate
+// registries, so live joins never reach here — the manager fetches the roster
+// via GET /players (mirroring how offline polls GET /round). The sample game is
+// seeded with a couple of players so offline hosting still shows a roster.
 
 const SEED_NOTES = [
   "the wizard demands your golden cheese before midnight",
@@ -19,6 +25,9 @@ const SEED_NOTES = [
   "nobody whispers but the haunted robot screams now",
   "return my tiny dragon and we forget the forbidden noodle",
 ]
+
+// Sample roster for the seeded game so offline hosting shows joined players.
+const SEED_PLAYERS = [{ id: "Ada" }, { id: "Grace" }]
 
 // A small built-in prompt bank so offline hosting can draw prompts. Each game
 // gets its own shuffled copy (a "deck") so rounds vary per game.
@@ -48,7 +57,7 @@ function shuffled(list) {
 }
 
 // games: { [code]: { notes: string[], deck: string[], cursor: number,
-//                    round: number, prompt: string } }
+//                    round: number, prompt: string, players: {id}[] } }
 let games = {
   [SEED_CODE]: {
     notes: [...SEED_NOTES],
@@ -56,6 +65,7 @@ let games = {
     cursor: 0,
     round: 0,
     prompt: "",
+    players: [...SEED_PLAYERS],
   },
 }
 
@@ -131,13 +141,15 @@ const NOTES_RE = /^\/games\/(\d{4})\/submitted-notes$/
 const GAME_RE = /^\/games\/(\d{4})$/
 const ROUNDS_RE = /^\/games\/(\d{4})\/rounds$/
 const ROUND_RE = /^\/games\/(\d{4})\/round$/
+const PLAYERS_RE = /^\/games\/(\d{4})\/players$/
 
-// Backfill round fields on games persisted before rounds existed.
+// Backfill round/roster fields on games persisted before they existed.
 function withRoundFields(game) {
   if (!Array.isArray(game.deck)) game.deck = shuffled(PROMPT_BANK)
   if (typeof game.cursor !== "number") game.cursor = 0
   if (typeof game.round !== "number") game.round = 0
   if (typeof game.prompt !== "string") game.prompt = ""
+  if (!Array.isArray(game.players)) game.players = []
   return game
 }
 
@@ -153,9 +165,19 @@ export async function mockApiRequest(method, url) {
       cursor: 0,
       round: 0,
       prompt: "",
+      players: [],
     }
     save()
     return jsonResponse({ code }, 201)
+  }
+
+  // Current roster.
+  const playersMatch = url.match(PLAYERS_RE)
+  if (playersMatch && method === "GET") {
+    const code = playersMatch[1]
+    const game = games[code]
+    if (!game) return jsonResponse({ error: `game ${code} not found` }, 404)
+    return jsonResponse({ players: [...withRoundFields(game).players] })
   }
 
   // Draw the next prompt (start a round).
