@@ -26,6 +26,12 @@
       <div class="code-card" :class="{ 'code-card--corner': round > 0 }">
         <span class="code-label">Join at the code</span>
         <span class="code-value">{{ code }}</span>
+        <!-- QR deep link — only in the roomy hero (round 0); the corner badge is
+             too small to scan. Points at the client with the code prefilled. -->
+        <template v-if="round === 0 && qrDataUrl">
+          <img :src="qrDataUrl" class="code-qr" alt="QR code to join the game" />
+          <span class="code-qr-hint">Scan to join</span>
+        </template>
         <button
           @click="copyInvite"
           class="game-btn game-btn--ghost"
@@ -104,9 +110,11 @@
 import NoteSlate from "@/components/NoteSlate.vue";
 import PromptCard from "@/components/PromptCard.vue";
 import PlayerRoster from "@/components/PlayerRoster.vue";
+import QRCode from "qrcode";
 import { apiRequest, startRound, getRound, getPlayers, IS_OFFLINE } from "@/api";
 import { createGameSocket } from "@/socket";
 import { copyText, shareMessage } from "@/clipboard";
+import { joinUrl } from "@/joinUrl";
 
 const CODE_KEY = "quipnotes.manager.code";
 const ROUND_KEY = "quipnotes.manager.round";
@@ -127,6 +135,9 @@ export default {
       busy: false,
       drawing: false,
       copyLabel: "Copy invite",
+      // Data-URL of the QR code that deep-links players to the client with the
+      // code prefilled. Rendered client-side (no network) whenever code changes.
+      qrDataUrl: "",
       // Round / prompt state.
       round: 0,
       prompt: "",
@@ -135,6 +146,14 @@ export default {
       // `players` event + snapshot online, and by fetchPlayers on mount/restore.
       players: [],
     };
+  },
+  watch: {
+    // Regenerate the join QR whenever the active code changes (start, restore,
+    // return-to-lobby clears it). Watchers don't fire for the initial restore,
+    // so mounted() calls renderQr() directly for that case.
+    code(newCode) {
+      this.renderQr(newCode);
+    },
   },
   mounted() {
     try {
@@ -148,6 +167,7 @@ export default {
     // server, and (online) reopen the live event stream that keeps both
     // current from here on.
     if (this.code) {
+      this.renderQr(this.code);
       this.syncRound();
       this.getNotes();
       this.fetchPlayers();
@@ -359,6 +379,23 @@ export default {
         .catch((error) => {
           alert(`Error fetching data: ${error.message}`);
         });
+    },
+    // Render the join deep-link as a QR data-URL (fully client-side). Cleared
+    // when there's no active code so a stale QR never lingers in the lobby.
+    async renderQr(code) {
+      if (!code) {
+        this.qrDataUrl = "";
+        return;
+      }
+      try {
+        this.qrDataUrl = await QRCode.toDataURL(joinUrl(code), {
+          width: 220,
+          margin: 1,
+        });
+      } catch {
+        // Non-fatal: fall back to the code + copyable link without a QR.
+        this.qrDataUrl = "";
+      }
     },
     async copyInvite() {
       const ok = await copyText(shareMessage(this.code));
@@ -579,6 +616,24 @@ body {
 .code-card--corner .code-value {
   font-size: clamp(1.6rem, 4vw, 2.4rem);
   letter-spacing: 0.08em;
+}
+
+/* Join QR — white quiet-zone keeps it scannable on the paper surface and in
+   dark mode (the QR itself is always black-on-white). */
+.code-qr {
+  width: 220px;
+  height: 220px;
+  padding: var(--space-2);
+  background: #ffffff;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-tile);
+}
+
+.code-qr-hint {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-muted);
 }
 
 /* The "Waiting for players…" lede shown above the code while no round is live. */

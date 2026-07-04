@@ -3,11 +3,15 @@ import { copyText, shareMessage } from './clipboard.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('shareMessage', () => {
-  it('embeds the code in the invite text', () => {
-    expect(shareMessage('4821')).toBe('Join my QuipNotes game! Code: 4821')
+  it('embeds the code and a prefilled join link in the invite text', () => {
+    vi.stubEnv('VITE_CLIENT_URL', 'https://play.rotcev.com')
+    expect(shareMessage('4821')).toBe(
+      'Join my QuipNotes game! Code: 4821\nhttps://play.rotcev.com/?code=4821'
+    )
   })
 })
 

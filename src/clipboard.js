@@ -2,9 +2,13 @@
 // only works in a secure context (https or localhost), so fall back to a
 // hidden <textarea> + execCommand('copy') when it's unavailable.
 
-// shareMessage builds the text a host pastes into a group chat to invite players.
+import { joinUrl } from './joinUrl.js';
+
+// shareMessage builds the text a host pastes into a group chat to invite
+// players — the code (for manual entry) plus a tap-to-join deep link that
+// prefills the code, mirroring what the QR encodes.
 export function shareMessage(code) {
-  return `Join my QuipNotes game! Code: ${code}`;
+  return `Join my QuipNotes game! Code: ${code}\n${joinUrl(code)}`;
 }
 
 // copyText copies text to the clipboard and resolves to true on success.
