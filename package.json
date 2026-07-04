@@ -15,6 +15,7 @@
     "deploy": "gh-pages -d dist --dotfiles"
   },
   "dependencies": {
+    "qrcode": "^1.5.4",
     "vue": "^3.2.13"
   },
   "devDependencies": {
