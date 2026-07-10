@@ -100,6 +100,48 @@ describe('App hosting', () => {
     expect(wrapper.text()).toContain('Answered: 2 / 3')
   })
 
+  it('shuffles the note board by a stable per-round order', async () => {
+    const wrapper = await mountHosting('4821')
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'p' })
+    socketOnEvent({ type: 'players', players: [{ id: 'a' }] })
+
+    // Deterministic keys so the shuffle is assertable. Installed after mount so
+    // startup work (e.g. QR rendering) doesn't consume the sequence.
+    const randoms = [0.5, 0.1, 0.9, 0.3]
+    const randSpy = vi
+      .spyOn(Math, 'random')
+      .mockImplementation(() => randoms.shift())
+
+    apiRequest.mockResolvedValueOnce(
+      okJson({ notes: [['0|apple'], ['1|banana'], ['2|cherry']] }),
+    )
+    socketOnEvent({ type: 'submission', count: 3 })
+    await flushPromises()
+
+    // Keys apple=0.5, banana=0.1, cherry=0.9 → not submission order.
+    const order1 = wrapper
+      .findAllComponents({ name: 'NoteSlate' })
+      .map((c) => c.props('tokens')[0])
+    expect(order1).toEqual(['1|banana', '0|apple', '2|cherry'])
+
+    // A fourth note arrives mid-round: the existing three keep their relative
+    // order (stable per round) and the newcomer (key 0.3) slots in by its key.
+    apiRequest.mockResolvedValueOnce(
+      okJson({
+        notes: [['0|apple'], ['1|banana'], ['2|cherry'], ['3|date']],
+      }),
+    )
+    socketOnEvent({ type: 'submission', count: 4 })
+    await flushPromises()
+
+    const order2 = wrapper
+      .findAllComponents({ name: 'NoteSlate' })
+      .map((c) => c.props('tokens')[0])
+    expect(order2).toEqual(['1|banana', '3|date', '0|apple', '2|cherry'])
+
+    randSpy.mockRestore()
+  })
+
   it('re-fetches the round, note board, and roster when restoring a running game', async () => {
     window.localStorage.setItem('quipnotes.manager.code', '4821')
     apiRequest

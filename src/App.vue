@@ -92,7 +92,7 @@
 
         <div v-else class="board">
           <NoteSlate
-            v-for="(resp, i) in responses"
+            v-for="(resp, i) in orderedResponses"
             :key="i"
             :tokens="resp"
           />
@@ -145,6 +145,12 @@ export default {
       // Roster of joined players ({ id } objects, scoring-ready). Fed by the
       // `players` event + snapshot online, and by fetchPlayers on mount/restore.
       players: [],
+      // A random sort key per note (parallel to `responses` by index) that gives
+      // the board a shuffled order instead of submission order — so the host
+      // can't tell who answered first. Keys stay fixed for the round (new notes
+      // just get their own key and slot in without moving existing ones), and
+      // reset whenever a new round starts. See orderedResponses / setResponses.
+      noteOrder: [],
     };
   },
   watch: {
@@ -153,6 +159,18 @@ export default {
     // so mounted() calls renderQr() directly for that case.
     code(newCode) {
       this.renderQr(newCode);
+    },
+  },
+  computed: {
+    // The submitted notes in shuffled display order. `noteOrder` holds one
+    // random key per note (by index); sorting by it scrambles the board while
+    // keeping each note stable for the round, since the keys don't change as
+    // more notes come in.
+    orderedResponses() {
+      return this.responses
+        .map((note, i) => ({ note, key: this.noteOrder[i] ?? 0 }))
+        .sort((a, b) => a.key - b.key)
+        .map((entry) => entry.note);
     },
   },
   mounted() {
@@ -178,6 +196,24 @@ export default {
     this.closeEvents();
   },
   methods: {
+    // Clear the board and its shuffle order (a fresh round re-randomizes).
+    resetResponses() {
+      this.responses = [];
+      this.noteOrder = [];
+    },
+    // Take a fresh notes list from the server and keep the board's shuffled
+    // order stable: existing notes hold their random key, and any newly-arrived
+    // notes get a key so they slot into a random spot without shifting the rest.
+    // Notes are append-only within a round, so index lines up with identity.
+    setResponses(notes) {
+      this.responses = notes || [];
+      while (this.noteOrder.length < this.responses.length) {
+        this.noteOrder.push(Math.random());
+      }
+      if (this.noteOrder.length > this.responses.length) {
+        this.noteOrder.length = this.responses.length;
+      }
+    },
     persistCode() {
       try {
         if (this.code) {
@@ -209,7 +245,7 @@ export default {
     returnToLobby(message) {
       this.closeEvents();
       this.code = "";
-      this.responses = [];
+      this.resetResponses();
       this.round = 0;
       this.prompt = "";
       this.submissionCount = 0;
@@ -228,7 +264,7 @@ export default {
         if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
         const data = await res.json();
         this.code = data.code;
-        this.responses = [];
+        this.resetResponses();
         this.round = 0;
         this.prompt = "";
         this.submissionCount = 0;
@@ -260,7 +296,7 @@ export default {
         const data = await res.json();
         this.round = data.round;
         this.prompt = data.prompt;
-        this.responses = [];
+        this.resetResponses();
         this.submissionCount = 0;
         this.persistRound();
       } catch (error) {
@@ -315,7 +351,7 @@ export default {
         case "round_started":
           this.round = evt.round;
           this.prompt = evt.prompt;
-          this.responses = [];
+          this.resetResponses();
           this.submissionCount = 0;
           this.persistRound();
           break;
@@ -374,7 +410,7 @@ export default {
           return response.json();
         })
         .then((data) => {
-          if (data) this.responses = data.notes;
+          if (data) this.setResponses(data.notes);
         })
         .catch((error) => {
           alert(`Error fetching data: ${error.message}`);
