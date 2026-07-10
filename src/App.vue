@@ -364,6 +364,23 @@ export default {
         // Non-fatal: the poll/socket or a later action will re-sync.
       }
     },
+    // Called when the event socket can't (re)connect: probe whether the game
+    // still exists. A 404 means the server no longer knows this code (it
+    // likely restarted), so recover to the lobby — which also closes the
+    // socket and ends its reconnect loop.
+    async checkGameAlive() {
+      if (!this.code) return;
+      try {
+        const res = await getRound(this.code);
+        if (res.status === 404) {
+          this.returnToLobby(
+            "That game no longer exists — the server may have restarted. Back to the lobby."
+          );
+        }
+      } catch {
+        // Server unreachable: the socket keeps backing off and retrying.
+      }
+    },
     // Flip a note face-up from the host screen (the judge's phone is the usual
     // driver). Flip locally on success too, so this screen doesn't wait for its
     // own note_flipped echo.
@@ -399,7 +416,13 @@ export default {
     // host drives rounds directly from drawPrompt's response.
     openEvents() {
       if (IS_OFFLINE || this.socket) return;
-      this.socket = createGameSocket(this.code, (evt) => this.handleEvent(evt));
+      this.socket = createGameSocket(this.code, (evt) => this.handleEvent(evt), {
+        // The socket can't tell "server briefly down" from "game gone" (the
+        // server restarted and wiped it). After a few failed reconnects,
+        // check over HTTP — a dead code should send us to the lobby, not
+        // leave the socket retrying forever.
+        onUnreachable: () => this.checkGameAlive(),
+      });
     },
     closeEvents() {
       if (this.socket) {
