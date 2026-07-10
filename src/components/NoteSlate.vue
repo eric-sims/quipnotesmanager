@@ -2,15 +2,18 @@
   <button
     type="button"
     class="slate"
-    :class="{ 'slate--flipped': revealed }"
-    :aria-pressed="revealed"
-    :aria-label="revealed ? ariaText : 'Hidden note — click to reveal'"
-    @click="toggleReveal"
+    :class="{ 'slate--flipped': flipped, 'slate--winner': winner }"
+    :aria-pressed="flipped"
+    :aria-label="flipped ? ariaText : 'Hidden note'"
+    :disabled="!flipped && !flippable"
+    @click="onClick"
   >
     <span class="slate__inner">
       <!-- Front: the blank black slate, waiting to be flipped. -->
       <span class="slate__face slate__face--front">
-        <span class="slate__hint">Click to reveal</span>
+        <span class="slate__hint">{{
+          flippable ? 'Click to reveal' : 'Waiting for the judge…'
+        }}</span>
       </span>
 
       <!-- Back: the note, laid out as magnetic word tiles on the slate. Each
@@ -18,6 +21,7 @@
            way tiles spaced apart on a magnetic slate read as distinct
            expressions. -->
       <span class="slate__face slate__face--back">
+        <span v-if="winner" class="slate__winner-badge">Favorite!</span>
         <span class="slate__note">
           <span
             v-for="(line, li) in lines"
@@ -50,12 +54,27 @@ export default {
       type: Array,
       required: true,
     },
+    // Face-up state is server-owned now: the judge flips from their phone and
+    // note_flipped events drive this prop, so the room follows along. Clicking
+    // the face-down slate emits `flip` (the host may flip too); flips are
+    // one-way, so a face-up slate ignores clicks.
+    flipped: {
+      type: Boolean,
+      default: false,
+    },
+    // Whether this screen may flip the card yet (judging open, or a judge-less
+    // round). Face-down and unflippable renders as "Waiting for the judge…".
+    flippable: {
+      type: Boolean,
+      default: true,
+    },
+    // True for the judge's picked favorite: highlighted with a badge.
+    winner: {
+      type: Boolean,
+      default: false,
+    },
   },
-  data() {
-    return {
-      revealed: false,
-    };
-  },
+  emits: ['flip'],
   computed: {
     // Split the token list into clusters on each break, then parse every tile
     // into a magnet. A running index drives a stable, gentle hand-placed jitter
@@ -84,8 +103,8 @@ export default {
     },
   },
   methods: {
-    toggleReveal() {
-      this.revealed = !this.revealed;
+    onClick() {
+      if (!this.flipped && this.flippable) this.$emit('flip');
     },
   },
 };
@@ -109,6 +128,38 @@ export default {
   outline: 3px solid var(--color-focus);
   outline-offset: 4px;
   border-radius: var(--radius-md);
+}
+
+/* Face-down but not flippable yet: the card is informational, not a control. */
+.slate:disabled {
+  cursor: default;
+}
+
+/* The picked favorite glows in the accent color. */
+.slate--winner .slate__face--back {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 4px var(--color-accent),
+    inset 0 2px 14px rgba(0, 0, 0, 0.6),
+    var(--shadow-card);
+}
+
+.slate__winner-badge {
+  position: absolute;
+  top: calc(-1 * var(--space-3));
+  left: 50%;
+  transform: translateX(-50%) rotate(-3deg);
+  z-index: 1;
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-tile);
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-accent-contrast);
+  background-color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-tile);
 }
 
 .slate__inner {
@@ -171,6 +222,7 @@ export default {
 
 /* --- Back: the slate frame, now holding magnet tiles --- */
 .slate__face--back {
+  position: relative; /* anchors the winner badge */
   transform: rotateY(180deg);
   background:
     radial-gradient(circle at 30% 20%, rgba(255, 255, 255, 0.05), transparent 60%),

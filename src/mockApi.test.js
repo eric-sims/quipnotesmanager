@@ -102,11 +102,20 @@ describe('DELETE /games/:code', () => {
 })
 
 describe('rounds', () => {
-  it('starts at round 0 with no prompt', async () => {
+  it('starts at round 0 with no prompt, judge, or winner', async () => {
     const api = await freshApi()
     const { code } = await (await api('POST', '/games')).json()
     const data = await (await api('GET', `/games/${code}/round`)).json()
-    expect(data).toEqual({ round: 0, prompt: '' })
+    expect(data).toEqual({
+      round: 0,
+      prompt: '',
+      judgeId: '',
+      judgingOpen: false,
+      count: 0,
+      total: 0,
+      favoriteNoteId: 0,
+      winnerId: '',
+    })
   })
 
   it('draws a prompt and advances the round', async () => {
@@ -144,6 +153,58 @@ describe('rounds', () => {
     const api = await freshApi()
     const res = await api('POST', '/games/9999/rounds')
     expect(res.status).toBe(404)
+  })
+})
+
+describe('judging', () => {
+  it('seeded notes are wire-shaped: stable 1-based ids, face-down', async () => {
+    const api = await freshApi()
+    const data = await (await api('GET', `/games/${SEED}/submitted-notes`)).json()
+    for (const [i, note] of data.notes.entries()) {
+      expect(note.id).toBe(i + 1)
+      expect(Array.isArray(note.tokens)).toBe(true)
+      expect(note.flipped).toBe(false)
+    }
+  })
+
+  it('flips a note face-up in a judge-less round (one-way)', async () => {
+    const api = await freshApi()
+    // The seeded game is at round 0 with no judge, so flips are free.
+    const res = await api('POST', `/games/${SEED}/notes/1/flip`)
+    expect(res.ok).toBe(true)
+
+    const data = await (await api('GET', `/games/${SEED}/submitted-notes`)).json()
+    expect(data.notes.find((n) => n.id === 1).flipped).toBe(true)
+  })
+
+  it('assigns a rotating judge with 2+ players and locks flips until judging opens', async () => {
+    const api = await freshApi()
+    // The seeded game has two players (Ada, Grace).
+    const first = await (await api('POST', `/games/${SEED}/rounds`)).json()
+    expect(['Ada', 'Grace']).toContain(first.judgeId)
+    expect(first.judgingOpen).toBe(false)
+    expect(first.total).toBe(1) // the judge doesn't answer
+
+    // With a judge and judging closed, flips 409 (mirrors the server).
+    const flip = await api('POST', `/games/${SEED}/notes/1/flip`)
+    expect(flip.status).toBe(409)
+
+    // The judge rotates on the next round.
+    const second = await (await api('POST', `/games/${SEED}/rounds`)).json()
+    expect(second.judgeId).not.toBe(first.judgeId)
+  })
+
+  it('assigns no judge to a round with fewer than 2 players', async () => {
+    const api = await freshApi()
+    const { code } = await (await api('POST', '/games')).json()
+    const drawn = await (await api('POST', `/games/${code}/rounds`)).json()
+    expect(drawn.judgeId).toBe('')
+  })
+
+  it('400s flipping an unknown note', async () => {
+    const api = await freshApi()
+    const res = await api('POST', `/games/${SEED}/notes/99/flip`)
+    expect(res.status).toBe(400)
   })
 })
 

@@ -31,15 +31,38 @@ describe('NoteSlate', () => {
     expect(lines[1].findAll('.magnet').map((m) => m.text())).toEqual(['before', 'midnight'])
   })
 
-  it('flips to reveal on click and flips back on a second click', async () => {
+  it('emits flip on click; face-up state is owned by the flipped prop', async () => {
     const wrapper = mount(NoteSlate, { props: { tokens: TILES } })
 
+    // Clicking the face-down slate asks the parent (and so the server) to flip.
     await wrapper.trigger('click')
+    expect(wrapper.emitted('flip')).toHaveLength(1)
+    expect(wrapper.find('.slate--flipped').exists()).toBe(false) // not yet
+
+    // The flip lands (note_flipped / a successful POST) via the prop.
+    await wrapper.setProps({ flipped: true })
     expect(wrapper.find('.slate--flipped').exists()).toBe(true)
     expect(wrapper.attributes('aria-pressed')).toBe('true')
 
+    // Flips are one-way: clicking a face-up slate emits nothing more.
     await wrapper.trigger('click')
-    expect(wrapper.find('.slate--flipped').exists()).toBe(false)
-    expect(wrapper.attributes('aria-pressed')).toBe('false')
+    expect(wrapper.emitted('flip')).toHaveLength(1)
+  })
+
+  it('does not emit flip while unflippable (judging closed)', async () => {
+    const wrapper = mount(NoteSlate, {
+      props: { tokens: TILES, flippable: false },
+    })
+    expect(wrapper.find('.slate__hint').text()).toBe('Waiting for the judge…')
+    await wrapper.trigger('click')
+    expect(wrapper.emitted('flip')).toBeUndefined()
+  })
+
+  it('badges the picked favorite', () => {
+    const wrapper = mount(NoteSlate, {
+      props: { tokens: TILES, flipped: true, winner: true },
+    })
+    expect(wrapper.find('.slate--winner').exists()).toBe(true)
+    expect(wrapper.find('.slate__winner-badge').text()).toBe('Favorite!')
   })
 })
