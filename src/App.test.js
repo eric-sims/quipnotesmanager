@@ -21,11 +21,14 @@ vi.mock('@/api', () => ({
 }))
 
 // Stub the socket wrapper so App never opens a real WebSocket in tests, but
-// capture the onEvent callback so tests can simulate pushed events.
+// capture the onEvent callback (to simulate pushed events) and the options
+// (to simulate the socket reporting the server unreachable).
 let socketOnEvent = null
+let socketOpts = null
 vi.mock('@/socket', () => ({
-  createGameSocket: vi.fn((code, onEvent) => {
+  createGameSocket: vi.fn((code, onEvent, opts = {}) => {
     socketOnEvent = onEvent
+    socketOpts = opts
     return { close: vi.fn() }
   }),
 }))
@@ -46,6 +49,7 @@ beforeEach(() => {
   apiRequest.mockReset()
   isOffline = false
   socketOnEvent = null
+  socketOpts = null
   window.localStorage.clear()
 })
 
@@ -334,6 +338,36 @@ describe('App hosting', () => {
     expect(wrapper.text()).toContain('Start Game')
     expect(window.localStorage.getItem('quipnotes.manager.code')).toBeNull()
     vi.unstubAllGlobals()
+  })
+
+  it('returns to the lobby when the socket is unreachable and the game is gone (404)', async () => {
+    vi.stubGlobal('alert', vi.fn())
+    const wrapper = await mountHosting('4821')
+    expect(typeof socketOpts.onUnreachable).toBe('function')
+
+    // The socket reports repeated connection failures; the probe finds a 404.
+    apiRequest.mockResolvedValueOnce(okJson({ error: 'game 4821 not found' }, 404))
+    socketOpts.onUnreachable()
+    await flushPromises()
+
+    expect(apiRequest).toHaveBeenLastCalledWith('GET', '/games/4821/round', null, {
+      'Content-Type': 'application/json',
+    })
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Start Game')
+    expect(window.localStorage.getItem('quipnotes.manager.code')).toBeNull()
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps hosting when the socket is unreachable but the probe cannot reach the server either', async () => {
+    const wrapper = await mountHosting('4821')
+
+    apiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    socketOpts.onUnreachable()
+    await flushPromises()
+
+    // Server just down: stay on the game and let the socket keep retrying.
+    expect(wrapper.find('.code-value').text()).toBe('4821')
   })
 
   it('ends locally and returns to the lobby when the server is unreachable', async () => {
