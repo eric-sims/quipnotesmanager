@@ -5,10 +5,11 @@
 //
 //   POST   /games                          -> { code }   (start a game)
 //   DELETE /games/:code                     -> 200        (end a game)
-//   GET    /games/:code/submitted-notes     -> { notes: [ [token,...], ... ] }  (cleared each round)
-//   POST   /games/:code/rounds              -> { round, prompt }  (draw prompt)
-//   GET    /games/:code/round               -> { round, prompt }
-//   GET    /games/:code/players             -> { players: [{ id }] }  (roster)
+//   GET    /games/:code/submitted-notes     -> { notes: [{ id, tokens, flipped }] }  (cleared each round)
+//   POST   /games/:code/rounds              -> RoundState  (draw prompt; assigns the judge)
+//   GET    /games/:code/round               -> RoundState  ({ round, prompt, judgeId, judgingOpen, count, total, favoriteNoteId, winnerId })
+//   GET    /games/:code/players             -> { players: [{ id, score }] }  (roster / scoreboard)
+//   POST   /games/:code/notes/:id/flip      -> 200  (turn a note face-up; 409 while judging is closed)
 //
 // State is persisted to localStorage so games survive page reloads, and one
 // sample game (code "1234") is seeded with a few ransom notes so the manager
@@ -17,14 +18,17 @@
 // Offline has no WebSocket, and the player/manager mocks are separate
 // registries, so live joins never reach here — the manager fetches the roster
 // via GET /players (mirroring how offline polls GET /round). The sample game is
-// seeded with a couple of players so offline hosting still shows a roster.
+// seeded with a couple of players (with scores, so the scoreboard shows) —
+// but since no mock player ever submits, judging never opens in a judged
+// offline round; the seeded round-0 notes stay flippable because round 0 is
+// judge-less, mirroring the server's judge-less rule.
 
 import { BREAK_TILE } from "./tiles.js"
 
-// Each note is its ordered token list ("<id>|<word>" tiles plus BREAK_TILE line
-// breaks), the same shape the server returns. tokenize() builds one from a
-// sentence, treating a lone "/" as a line break so the seed reads naturally and
-// one note demonstrates the host's stacked-line rendering.
+// A note's tokens are its ordered token list ("<id>|<word>" tiles plus
+// BREAK_TILE line breaks), the same shape the server returns. tokenize()
+// builds one from a sentence, treating a lone "/" as a line break so the seed
+// reads naturally and one note demonstrates the host's stacked-line rendering.
 function tokenize(sentence) {
   let id = 0
   return sentence
@@ -33,15 +37,22 @@ function tokenize(sentence) {
     .map((word) => (word === "/" ? BREAK_TILE : `${id++}|${word}`))
 }
 
-const SEED_NOTES = [
-  tokenize("the wizard demands your golden cheese / before midnight"),
-  tokenize("i never ate the suspicious espresso"),
-  tokenize("nobody whispers / but the haunted robot / screams now"),
-  tokenize("return my tiny dragon and we forget the forbidden noodle"),
-]
+// Wrap seed sentences as wire notes: 1-based stable ids, face-down.
+function seedNotes() {
+  return [
+    "the wizard demands your golden cheese / before midnight",
+    "i never ate the suspicious espresso",
+    "nobody whispers / but the haunted robot / screams now",
+    "return my tiny dragon and we forget the forbidden noodle",
+  ].map((sentence, i) => ({ id: i + 1, tokens: tokenize(sentence), flipped: false }))
+}
 
-// Sample roster for the seeded game so offline hosting shows joined players.
-const SEED_PLAYERS = [{ id: "Ada" }, { id: "Grace" }]
+// Sample roster (with scores) so offline hosting shows a live-looking
+// scoreboard.
+const SEED_PLAYERS = [
+  { id: "Ada", score: 2 },
+  { id: "Grace", score: 1 },
+]
 
 // A small built-in prompt bank so offline hosting can draw prompts. Each game
 // gets its own shuffled copy (a "deck") so rounds vary per game.
@@ -70,21 +81,44 @@ function shuffled(list) {
   return copy
 }
 
-// games: { [code]: { notes: string[][], deck: string[], cursor: number,
-//                    round: number, prompt: string, players: {id}[] } }
+// games: { [code]: { notes: {id,tokens,flipped}[], deck: string[],
+//                    cursor: number, round: number, prompt: string,
+//                    players: {id,score}[], judgeId: string,
+//                    judgingOpen: bool, favoriteNoteId: number,
+//                    winnerId: string } }
 let games = {
   [SEED_CODE]: {
-    notes: [...SEED_NOTES],
+    notes: seedNotes(),
     deck: shuffled(PROMPT_BANK),
     cursor: 0,
     round: 0,
     prompt: "",
-    players: [...SEED_PLAYERS],
+    players: SEED_PLAYERS.map((p) => ({ ...p })),
+    judgeId: "",
+    judgingOpen: false,
+    favoriteNoteId: 0,
+    winnerId: "",
   },
 }
 
+// The full round snapshot, mirroring the server's RoundState wire shape.
+function roundState(game) {
+  const total = Math.max(game.players.length - (game.judgeId ? 1 : 0), 0)
+  return {
+    round: game.round,
+    prompt: game.prompt,
+    judgeId: game.judgeId,
+    judgingOpen: game.judgingOpen,
+    count: 0, // no mock player ever submits offline
+    total,
+    favoriteNoteId: game.favoriteNoteId,
+    winnerId: game.winnerId,
+  }
+}
+
 // Draw the next prompt off a game's deck, reshuffling on exhaustion so it never
-// runs out. Mirrors the server's StartRound.
+// runs out, and rotate the judge through the roster in join order. Mirrors the
+// server's StartRound (including its judge-less rule for <2 players).
 function drawNextPrompt(game) {
   if (game.cursor >= game.deck.length) {
     game.deck = shuffled(PROMPT_BANK)
@@ -94,7 +128,14 @@ function drawNextPrompt(game) {
   game.cursor += 1
   game.round += 1
   game.notes = []
-  return { round: game.round, prompt: game.prompt }
+  game.judgeId =
+    game.players.length >= 2
+      ? game.players[(game.round - 1) % game.players.length].id
+      : ""
+  game.judgingOpen = false
+  game.favoriteNoteId = 0
+  game.winnerId = ""
+  return roundState(game)
 }
 
 function storage() {
@@ -156,14 +197,27 @@ const GAME_RE = /^\/games\/(\d{4})$/
 const ROUNDS_RE = /^\/games\/(\d{4})\/rounds$/
 const ROUND_RE = /^\/games\/(\d{4})\/round$/
 const PLAYERS_RE = /^\/games\/(\d{4})\/players$/
+const FLIP_RE = /^\/games\/(\d{4})\/notes\/(\d+)\/flip$/
 
-// Backfill round/roster fields on games persisted before they existed.
+// Backfill round/roster/judging fields on games persisted before they existed.
 function withRoundFields(game) {
   if (!Array.isArray(game.deck)) game.deck = shuffled(PROMPT_BANK)
   if (typeof game.cursor !== "number") game.cursor = 0
   if (typeof game.round !== "number") game.round = 0
   if (typeof game.prompt !== "string") game.prompt = ""
   if (!Array.isArray(game.players)) game.players = []
+  if (typeof game.judgeId !== "string") game.judgeId = ""
+  if (typeof game.judgingOpen !== "boolean") game.judgingOpen = false
+  if (typeof game.favoriteNoteId !== "number") game.favoriteNoteId = 0
+  if (typeof game.winnerId !== "string") game.winnerId = ""
+  // Notes persisted in the old bare token-list shape become wire notes.
+  if (Array.isArray(game.notes)) {
+    game.notes = game.notes.map((note, i) =>
+      Array.isArray(note) ? { id: i + 1, tokens: note, flipped: false } : note
+    )
+  } else {
+    game.notes = []
+  }
   return game
 }
 
@@ -180,6 +234,10 @@ export async function mockApiRequest(method, url) {
       round: 0,
       prompt: "",
       players: [],
+      judgeId: "",
+      judgingOpen: false,
+      favoriteNoteId: 0,
+      winnerId: "",
     }
     save()
     return jsonResponse({ code }, 201)
@@ -211,11 +269,28 @@ export async function mockApiRequest(method, url) {
     const code = roundMatch[1]
     const game = games[code]
     if (!game) return jsonResponse({ error: `game ${code} not found` }, 404)
-    withRoundFields(game)
-    return jsonResponse({ round: game.round, prompt: game.prompt })
+    return jsonResponse(roundState(withRoundFields(game)))
   }
 
-  // Read / clear a game's notes.
+  // Flip a note face-up. Mirrors the server: one-way, idempotent, and locked
+  // until judging opens except in judge-less rounds.
+  const flipMatch = url.match(FLIP_RE)
+  if (flipMatch && method === "POST") {
+    const [, code, rawId] = flipMatch
+    const game = games[code]
+    if (!game) return jsonResponse({ error: `game ${code} not found` }, 404)
+    withRoundFields(game)
+    if (game.judgeId && !game.judgingOpen) {
+      return jsonResponse({ error: "judging has not started yet" }, 409)
+    }
+    const note = game.notes.find((n) => n.id === Number(rawId))
+    if (!note) return jsonResponse({ error: "unknown note" }, 400)
+    note.flipped = true
+    save()
+    return jsonResponse({}, 200)
+  }
+
+  // Read a game's notes.
   const notesMatch = url.match(NOTES_RE)
   if (notesMatch) {
     const code = notesMatch[1]
@@ -223,7 +298,7 @@ export async function mockApiRequest(method, url) {
     if (!game) return jsonResponse({ error: `game ${code} not found` }, 404)
 
     if (method === "GET") {
-      return jsonResponse({ notes: [...game.notes] })
+      return jsonResponse({ notes: withRoundFields(game).notes.map((n) => ({ ...n })) })
     }
   }
 

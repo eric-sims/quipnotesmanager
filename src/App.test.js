@@ -13,6 +13,8 @@ vi.mock('@/api', () => ({
     apiRequest('GET', `/games/${code}/round`, null, JSON_HEADERS),
   getPlayers: (code) =>
     apiRequest('GET', `/games/${code}/players`, null, JSON_HEADERS),
+  flipNote: (code, noteId) =>
+    apiRequest('POST', `/games/${code}/notes/${noteId}/flip`, null, JSON_HEADERS),
   get IS_OFFLINE() {
     return isOffline
   },
@@ -84,9 +86,14 @@ describe('App hosting', () => {
     socketOnEvent({ type: 'players', players: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] })
 
     apiRequest.mockResolvedValueOnce(
-      okJson({ notes: [['0|note', '1|a'], ['0|note', '1|b']] }),
+      okJson({
+        notes: [
+          { id: 1, tokens: ['0|note', '1|a'], flipped: false },
+          { id: 2, tokens: ['0|note', '1|b'], flipped: false },
+        ],
+      }),
     )
-    socketOnEvent({ type: 'submission', count: 2 })
+    socketOnEvent({ type: 'submission', count: 2, total: 3 })
     await flushPromises()
 
     expect(apiRequest).toHaveBeenLastCalledWith(
@@ -100,54 +107,40 @@ describe('App hosting', () => {
     expect(wrapper.text()).toContain('Answered: 2 / 3')
   })
 
-  it('shuffles the note board by a stable per-round order', async () => {
+  it('renders the board in the server order with server-owned flip state', async () => {
     const wrapper = await mountHosting('4821')
     socketOnEvent({ type: 'round_started', round: 1, prompt: 'p' })
-    socketOnEvent({ type: 'players', players: [{ id: 'a' }] })
 
-    // Deterministic keys so the shuffle is assertable. Installed after mount so
-    // startup work (e.g. QR rendering) doesn't consume the sequence.
-    const randoms = [0.5, 0.1, 0.9, 0.3]
-    const randSpy = vi
-      .spyOn(Math, 'random')
-      .mockImplementation(() => randoms.shift())
-
-    apiRequest.mockResolvedValueOnce(
-      okJson({ notes: [['0|apple'], ['1|banana'], ['2|cherry']] }),
-    )
-    socketOnEvent({ type: 'submission', count: 3 })
-    await flushPromises()
-
-    // Keys apple=0.5, banana=0.1, cherry=0.9 → not submission order.
-    const order1 = wrapper
-      .findAllComponents({ name: 'NoteSlate' })
-      .map((c) => c.props('tokens')[0])
-    expect(order1).toEqual(['1|banana', '0|apple', '2|cherry'])
-
-    // A fourth note arrives mid-round: the existing three keep their relative
-    // order (stable per round) and the newcomer (key 0.3) slots in by its key.
+    // The server sends the board pre-shuffled; the app must not reorder it.
     apiRequest.mockResolvedValueOnce(
       okJson({
-        notes: [['0|apple'], ['1|banana'], ['2|cherry'], ['3|date']],
+        notes: [
+          { id: 2, tokens: ['1|banana'], flipped: false },
+          { id: 3, tokens: ['2|cherry'], flipped: true },
+          { id: 1, tokens: ['0|apple'], flipped: false },
+        ],
       }),
     )
-    socketOnEvent({ type: 'submission', count: 4 })
+    socketOnEvent({ type: 'submission', count: 3, total: 3 })
     await flushPromises()
 
-    const order2 = wrapper
-      .findAllComponents({ name: 'NoteSlate' })
-      .map((c) => c.props('tokens')[0])
-    expect(order2).toEqual(['1|banana', '3|date', '0|apple', '2|cherry'])
-
-    randSpy.mockRestore()
+    const slates = wrapper.findAllComponents({ name: 'NoteSlate' })
+    expect(slates.map((c) => c.props('tokens')[0])).toEqual([
+      '1|banana',
+      '2|cherry',
+      '0|apple',
+    ])
+    expect(slates.map((c) => c.props('flipped'))).toEqual([false, true, false])
   })
 
   it('re-fetches the round, note board, and roster when restoring a running game', async () => {
     window.localStorage.setItem('quipnotes.manager.code', '4821')
     apiRequest
       .mockResolvedValueOnce(okJson({ round: 1, prompt: 'A boat' })) // syncRound
-      .mockResolvedValueOnce(okJson({ notes: [['0|note', '1|a']] })) // getNotes
-      .mockResolvedValueOnce(okJson({ players: [{ id: 'Ada' }] })) // fetchPlayers
+      .mockResolvedValueOnce(
+        okJson({ notes: [{ id: 1, tokens: ['0|note', '1|a'], flipped: false }] }),
+      ) // getNotes
+      .mockResolvedValueOnce(okJson({ players: [{ id: 'Ada', score: 0 }] })) // fetchPlayers
     const wrapper = mount(App)
     await flushPromises()
 
@@ -190,6 +183,126 @@ describe('App hosting', () => {
     expect(wrapper.find('.code-card--corner').exists()).toBe(true)
     // Roster stays visible during the round.
     expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(true)
+  })
+
+  it('shows the judge and the scored roster during a round', async () => {
+    const wrapper = await mountHosting('4821')
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'p', judgeId: 'Ada' })
+    socketOnEvent({
+      type: 'players',
+      players: [
+        { id: 'Ada', score: 2 },
+        { id: 'Grace', score: 1 },
+      ],
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.judge-line').text()).toContain('Ada')
+    const chips = wrapper.findAll('.player-chip')
+    expect(chips[0].text()).toContain('2')
+    expect(chips[1].text()).toContain('1')
+    expect(chips[0].find('.player-chip__judge').exists()).toBe(true)
+    expect(chips[1].find('.player-chip__judge').exists()).toBe(false)
+    // Two players, one judging → one expected answer.
+    expect(wrapper.text()).toContain('Answered: 0 / 1')
+  })
+
+  it('mirrors a note_flipped event onto the matching slate', async () => {
+    const wrapper = await mountHosting('4821')
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'p', judgeId: 'Ada' })
+    apiRequest.mockResolvedValueOnce(
+      okJson({
+        notes: [
+          { id: 1, tokens: ['0|apple'], flipped: false },
+          { id: 2, tokens: ['1|banana'], flipped: false },
+        ],
+      }),
+    )
+    socketOnEvent({ type: 'submission', count: 2, total: 2 })
+    await flushPromises()
+
+    socketOnEvent({ type: 'note_flipped', round: 1, noteId: 2 })
+    await flushPromises()
+
+    const slates = wrapper.findAllComponents({ name: 'NoteSlate' })
+    expect(slates.map((c) => c.props('flipped'))).toEqual([false, true])
+  })
+
+  it('locks host flips while judging is closed, and flips via the server once open', async () => {
+    const wrapper = await mountHosting('4821')
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'p', judgeId: 'Ada' })
+    apiRequest.mockResolvedValueOnce(
+      okJson({ notes: [{ id: 1, tokens: ['0|apple'], flipped: false }] }),
+    )
+    socketOnEvent({ type: 'submission', count: 1, total: 2 })
+    await flushPromises()
+
+    // Judging not open yet: the slate is disabled and no flip request goes out.
+    const before = apiRequest.mock.calls.length
+    await wrapper.findComponent({ name: 'NoteSlate' }).find('button').trigger('click')
+    expect(apiRequest.mock.calls.length).toBe(before)
+
+    // judging_ready re-fetches the board and unlocks flips.
+    apiRequest.mockResolvedValueOnce(
+      okJson({ notes: [{ id: 1, tokens: ['0|apple'], flipped: false }] }),
+    )
+    socketOnEvent({ type: 'judging_ready', round: 1 })
+    await flushPromises()
+
+    apiRequest.mockResolvedValueOnce(okJson({}, 200))
+    await wrapper.findComponent({ name: 'NoteSlate' }).find('button').trigger('click')
+    await flushPromises()
+
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      'POST',
+      '/games/4821/notes/1/flip',
+      null,
+      JSON_HEADERS,
+    )
+    expect(
+      wrapper.findComponent({ name: 'NoteSlate' }).props('flipped'),
+    ).toBe(true)
+  })
+
+  it('highlights the favorite and announces the winner on favorite_picked', async () => {
+    const wrapper = await mountHosting('4821')
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'p', judgeId: 'Ada' })
+    apiRequest.mockResolvedValueOnce(
+      okJson({
+        notes: [
+          { id: 1, tokens: ['0|apple'], flipped: true },
+          { id: 2, tokens: ['1|banana'], flipped: true },
+        ],
+      }),
+    )
+    socketOnEvent({ type: 'submission', count: 2, total: 2 })
+    await flushPromises()
+
+    socketOnEvent({ type: 'favorite_picked', round: 1, noteId: 2, winnerId: 'Grace' })
+    await flushPromises()
+
+    expect(wrapper.find('.winner-banner').text()).toContain('Grace')
+    const slates = wrapper.findAllComponents({ name: 'NoteSlate' })
+    expect(slates.map((c) => c.props('winner'))).toEqual([false, true])
+  })
+
+  it('a new round clears the board, judge, and winner', async () => {
+    const wrapper = await mountHosting('4821')
+    socketOnEvent({ type: 'round_started', round: 1, prompt: 'p', judgeId: 'Ada' })
+    apiRequest.mockResolvedValueOnce(
+      okJson({ notes: [{ id: 1, tokens: ['0|apple'], flipped: true }] }),
+    )
+    socketOnEvent({ type: 'submission', count: 1, total: 1 })
+    await flushPromises()
+    socketOnEvent({ type: 'favorite_picked', round: 1, noteId: 1, winnerId: 'Grace' })
+    await flushPromises()
+
+    socketOnEvent({ type: 'round_started', round: 2, prompt: 'q', judgeId: 'Grace' })
+    await flushPromises()
+
+    expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(0)
+    expect(wrapper.find('.winner-banner').exists()).toBe(false)
+    expect(wrapper.find('.judge-line').text()).toContain('Grace')
   })
 
   it('ends the game and returns to the lobby', async () => {

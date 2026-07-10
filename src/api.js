@@ -40,8 +40,16 @@ export function getRound(code) {
     return apiRequest('GET', `/games/${code}/round`, null, JSON_HEADERS);
 }
 
-// Current roster for a game. 200 -> { players: [{ id }] }. Used to restore the
-// player list on mount/reconnect; live updates arrive via the `players` event.
+// Current roster for a game. 200 -> { players: [{ id, score }] }. Used to
+// restore the player list on mount/reconnect; live updates arrive via the
+// `players` event.
 export function getPlayers(code) {
     return apiRequest('GET', `/games/${code}/players`, null, JSON_HEADERS);
+}
+
+// Turn a note face-up (1-based note id). The judge normally drives flips from
+// their phone, but the host screen retains the ability too; either way the
+// server broadcasts note_flipped so both screens flip together.
+export function flipNote(code, noteId) {
+    return apiRequest('POST', `/games/${code}/notes/${noteId}/flip`, null, JSON_HEADERS);
 }

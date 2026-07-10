@@ -63,6 +63,10 @@
       <template v-else>
         <PromptCard :round="round" :prompt="prompt" />
 
+        <p v-if="judgeId" class="judge-line">
+          <span class="judge-line__label">Judge</span> {{ judgeId }}
+        </p>
+
         <button
           @click="drawPrompt"
           class="game-btn game-btn--primary"
@@ -74,6 +78,7 @@
         <PlayerRoster
           v-if="players.length"
           :players="players"
+          :judge-id="judgeId"
           compact
           class="roster--corner"
         />
@@ -82,9 +87,17 @@
           <h2 class="board-title">Submitted notes</h2>
           <span class="note-count">Number of Notes: {{ responses.length }}</span>
           <span class="note-count">
-            Answered: {{ submissionCount }} / {{ players.length }}
+            Answered: {{ submissionCount }} / {{ answerTotal }}
           </span>
         </div>
+
+        <!-- The round's reveal: who won, once the judge picks. -->
+        <p v-if="winnerId" class="winner-banner">
+          🏆 {{ winnerId }} wins the round!
+        </p>
+        <p v-else-if="judgingOpen" class="board-lede">
+          Judging! {{ judgeId ? `${judgeId} flips the notes and picks a favorite.` : '' }}
+        </p>
 
         <p v-if="responses.length === 0" class="board-empty">
           No notes yet. They'll appear here as players submit.
@@ -92,9 +105,13 @@
 
         <div v-else class="board">
           <NoteSlate
-            v-for="(resp, i) in orderedResponses"
-            :key="i"
-            :tokens="resp"
+            v-for="note in responses"
+            :key="note.id"
+            :tokens="note.tokens"
+            :flipped="note.flipped"
+            :flippable="canFlip"
+            :winner="note.id === favoriteNoteId"
+            @flip="flipNote(note.id)"
           />
         </div>
       </template>
@@ -111,7 +128,14 @@ import NoteSlate from "@/components/NoteSlate.vue";
 import PromptCard from "@/components/PromptCard.vue";
 import PlayerRoster from "@/components/PlayerRoster.vue";
 import QRCode from "qrcode";
-import { apiRequest, startRound, getRound, getPlayers, IS_OFFLINE } from "@/api";
+import {
+  apiRequest,
+  startRound,
+  getRound,
+  getPlayers,
+  flipNote as apiFlipNote,
+  IS_OFFLINE,
+} from "@/api";
 import { createGameSocket } from "@/socket";
 import { copyText, shareMessage } from "@/clipboard";
 import { joinUrl } from "@/joinUrl";
@@ -142,15 +166,20 @@ export default {
       round: 0,
       prompt: "",
       submissionCount: 0,
-      // Roster of joined players ({ id } objects, scoring-ready). Fed by the
-      // `players` event + snapshot online, and by fetchPlayers on mount/restore.
+      // Players expected to answer this round (judge excluded), as reported by
+      // the server; 0 until the first submission/round sync.
+      submissionTotal: 0,
+      // Roster of joined players ({ id, score } objects). Fed by the `players`
+      // event + snapshot online, and by fetchPlayers on mount/restore. Scores
+      // update live when the judge picks a favorite.
       players: [],
-      // A random sort key per note (parallel to `responses` by index) that gives
-      // the board a shuffled order instead of submission order — so the host
-      // can't tell who answered first. Keys stay fixed for the round (new notes
-      // just get their own key and slot in without moving existing ones), and
-      // reset whenever a new round starts. See orderedResponses / setResponses.
-      noteOrder: [],
+      // Judging state for the active round. The judge flips notes from their
+      // phone (this screen mirrors each flip via note_flipped) and picks the
+      // favorite; this screen may flip too once judging is open.
+      judgeId: "",
+      judgingOpen: false,
+      favoriteNoteId: 0, // 1-based id of the winning note (0 = none yet)
+      winnerId: "",
     };
   },
   watch: {
@@ -162,15 +191,17 @@ export default {
     },
   },
   computed: {
-    // The submitted notes in shuffled display order. `noteOrder` holds one
-    // random key per note (by index); sorting by it scrambles the board while
-    // keeping each note stable for the round, since the keys don't change as
-    // more notes come in.
-    orderedResponses() {
-      return this.responses
-        .map((note, i) => ({ note, key: this.noteOrder[i] ?? 0 }))
-        .sort((a, b) => a.key - b.key)
-        .map((entry) => entry.note);
+    // How many answers the round expects: the server's count (judge excluded)
+    // once it has reported one, else derived from the roster so the indicator
+    // isn't 0/0 right after a draw.
+    answerTotal() {
+      if (this.submissionTotal > 0) return this.submissionTotal;
+      return Math.max(this.players.length - (this.judgeId ? 1 : 0), 0);
+    },
+    // Whether this screen may flip cards: once judging is open, or freely in a
+    // judge-less round (mirrors the server's rule — earlier flips would 409).
+    canFlip() {
+      return this.judgingOpen || !this.judgeId;
     },
   },
   mounted() {
@@ -196,23 +227,38 @@ export default {
     this.closeEvents();
   },
   methods: {
-    // Clear the board and its shuffle order (a fresh round re-randomizes).
     resetResponses() {
       this.responses = [];
-      this.noteOrder = [];
     },
-    // Take a fresh notes list from the server and keep the board's shuffled
-    // order stable: existing notes hold their random key, and any newly-arrived
-    // notes get a key so they slot into a random spot without shifting the rest.
-    // Notes are append-only within a round, so index lines up with identity.
+    // Take a fresh notes list from the server: [{ id, tokens, flipped }] in the
+    // server's shuffled display order — the same order the judge's phone shows,
+    // so "the third card" means the same note on both screens.
     setResponses(notes) {
       this.responses = notes || [];
-      while (this.noteOrder.length < this.responses.length) {
-        this.noteOrder.push(Math.random());
-      }
-      if (this.noteOrder.length > this.responses.length) {
-        this.noteOrder.length = this.responses.length;
-      }
+    },
+    // Reset everything scoped to one round's judging phase.
+    resetJudging() {
+      this.judgingOpen = false;
+      this.favoriteNoteId = 0;
+      this.winnerId = "";
+      this.submissionCount = 0;
+      this.submissionTotal = 0;
+    },
+    // Apply a RoundState payload (from POST /rounds, GET /round, or a restore).
+    // Sets every round/judging field but leaves the note board alone — on a
+    // restore this runs concurrently with getNotes(), and the board is reset
+    // only where a round actually advances (drawPrompt / round_started).
+    applyRoundState(state) {
+      if (!state) return;
+      this.round = state.round;
+      this.prompt = state.prompt;
+      this.judgeId = state.judgeId || "";
+      this.judgingOpen = !!state.judgingOpen;
+      this.submissionCount = Number(state.count) || 0;
+      this.submissionTotal = Number(state.total) || 0;
+      this.favoriteNoteId = Number(state.favoriteNoteId) || 0;
+      this.winnerId = state.winnerId || "";
+      this.persistRound();
     },
     persistCode() {
       try {
@@ -246,9 +292,10 @@ export default {
       this.closeEvents();
       this.code = "";
       this.resetResponses();
+      this.resetJudging();
       this.round = 0;
       this.prompt = "";
-      this.submissionCount = 0;
+      this.judgeId = "";
       this.players = [];
       this.persistCode();
       this.persistRound();
@@ -265,9 +312,10 @@ export default {
         const data = await res.json();
         this.code = data.code;
         this.resetResponses();
+        this.resetJudging();
         this.round = 0;
         this.prompt = "";
-        this.submissionCount = 0;
+        this.judgeId = "";
         this.players = [];
         this.persistCode();
         this.persistRound();
@@ -294,30 +342,44 @@ export default {
         }
         if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
         const data = await res.json();
-        this.round = data.round;
-        this.prompt = data.prompt;
+        this.applyRoundState(data);
+        // The server cleared the previous round's notes; clear the board too.
         this.resetResponses();
-        this.submissionCount = 0;
-        this.persistRound();
       } catch (error) {
         alert(`Could not draw a prompt: ${error.message}`);
       } finally {
         this.drawing = false;
       }
     },
-    // Re-sync the current round from the server (used on restore/reconnect).
+    // Re-sync the current round (judge, judging progress, winner included)
+    // from the server. Used on restore/reconnect.
     async syncRound() {
       if (!this.code) return;
       try {
         const res = await getRound(this.code);
         if (!res.ok) return;
         const data = await res.json();
-        this.round = data.round;
-        this.prompt = data.prompt;
-        this.persistRound();
+        this.applyRoundState(data);
       } catch {
         // Non-fatal: the poll/socket or a later action will re-sync.
       }
+    },
+    // Flip a note face-up from the host screen (the judge's phone is the usual
+    // driver). Flip locally on success too, so this screen doesn't wait for its
+    // own note_flipped echo.
+    async flipNote(noteId) {
+      if (!this.code || !this.canFlip) return;
+      try {
+        const res = await apiFlipNote(this.code, noteId);
+        if (!res.ok) return; // e.g. 409 while judging is still closed
+        this.markFlipped(noteId);
+      } catch {
+        // Non-fatal: the judge's flip (or a re-fetch) will catch the board up.
+      }
+    },
+    markFlipped(noteId) {
+      const note = this.responses.find((n) => n.id === Number(noteId));
+      if (note) note.flipped = true;
     },
     // Fetch the roster from the server (used on mount/restore and after start).
     // Online, live updates then arrive via the `players` event; offline this is
@@ -349,19 +411,44 @@ export default {
       if (!evt || !evt.type) return;
       switch (evt.type) {
         case "round_started":
+          // A new round resets the board and judging phase; the same round can
+          // be re-announced with a replacement judge (the previous one left),
+          // which must keep the board intact.
+          if (evt.round !== this.round) {
+            this.resetResponses();
+            this.resetJudging();
+          }
           this.round = evt.round;
           this.prompt = evt.prompt;
-          this.resetResponses();
-          this.submissionCount = 0;
+          this.judgeId = evt.judgeId || "";
           this.persistRound();
           break;
         case "submission":
           this.submissionCount = evt.count;
-          // Pull the latest board so notes appear as they come in.
+          this.submissionTotal = evt.total || 0;
+          // Pull the latest board so notes appear (face-down) as they come in.
           this.getNotes();
           break;
+        case "judging_ready":
+          // All notes are in (or the judge forced it): cards may flip now.
+          // Re-fetch the board too — on a reconnect this snapshot event is the
+          // cue to catch up on any flips missed while offline.
+          this.judgingOpen = true;
+          this.getNotes();
+          break;
+        case "note_flipped":
+          // The judge turned a card over on their phone — mirror it here.
+          this.markFlipped(evt.noteId);
+          break;
+        case "favorite_picked":
+          // The reveal: highlight the winning note and name its author. The
+          // refreshed scores arrive in the players broadcast that follows.
+          this.favoriteNoteId = Number(evt.noteId) || 0;
+          this.winnerId = evt.winnerId || "";
+          this.markFlipped(evt.noteId);
+          break;
         case "players":
-          // Live roster (join/leave) + the connect snapshot.
+          // Live roster with scores (join/leave, connect snapshot, post-pick).
           this.players = evt.players || [];
           break;
         case "game_ended":
@@ -724,6 +811,46 @@ body {
   margin: 0;
   font-size: clamp(1rem, 1.8vw, 1.3rem);
   color: var(--color-muted);
+}
+
+/* Who holds the gavel this round — sits right under the prompt. */
+.judge-line {
+  margin: 0;
+  font-family: var(--font-tile);
+  font-size: clamp(1.1rem, 2vw, 1.5rem);
+  font-weight: 700;
+}
+
+.judge-line__label {
+  margin-right: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.7em;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-accent-contrast);
+  background-color: var(--color-accent);
+  border-radius: var(--radius-sm);
+}
+
+/* The judging-phase lede over the board. */
+.board-lede {
+  margin: 0;
+  font-size: clamp(1rem, 1.8vw, 1.3rem);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* The round's reveal — big enough to read across the room. */
+.winner-banner {
+  margin: 0;
+  padding: var(--space-2) var(--space-5);
+  font-family: var(--font-tile);
+  font-size: clamp(1.3rem, 3vw, 2.2rem);
+  font-weight: 700;
+  color: var(--color-accent-contrast);
+  background-color: var(--color-accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 }
 
 .prompt-empty {
