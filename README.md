@@ -1,94 +1,132 @@
-# quipnotesmanager
+# Quipnotes — host/manager client
 
-Vue 3 admin / reader client for the quipNotes game. It reads the notes players
-have turned in (`GET /game/submitted-notes`) and can clear them
-(`DELETE /game/submitted-notes`). Each note renders as a "click to reveal" card
-so a host can unveil them one at a time.
+The big-screen **host client** for [Quipnotes](#the-system), a party game where players
+arrange word tiles into a "ransom note" answering a prompt. The host starts a game, shows
+the 4-digit join code (with a scannable QR deep-link), draws each round's prompt, and drives
+the shared board — the live scoreboard, each player's submitted note, and the reveal when
+the judge picks a favorite.
 
-## Project setup
-```
+Built with **Vue 3 + Vite**. Like the player client, it's a pure client: the
+[game server](#the-system) owns all state, and this app reflects it over REST plus a live
+WebSocket event stream.
+
+## The system
+
+Quipnotes is three independently-versioned projects (each its own git repo):
+
+| Project | Role |
+| --- | --- |
+| `quipnotes` | Go + Gin game server — the source of truth for all game state |
+| `quipnotesclient` | Player client — join with a name + code, draw, submit, judge |
+| **`quipnotesmanager`** (this repo) | Host/manager client — start a game, show the code, drive the board |
+
+## What the host does
+
+- **Start a game** (`POST /games`) and share the 4-digit code — shown as a giant hero with
+  a **QR deep-link** and a **Copy invite** button. A **family-friendly toggle** in the lobby
+  limits the game's prompts to family-friendly ones (fixed once the game starts).
+- **Draw each round's prompt** (`POST /games/:code/rounds`), pushed live to every phone.
+- **Watch the board fill** — a live player roster/scoreboard, an "Answered: n/total" count,
+  and each submitted note as a face-down slate that flips when the judge reveals it.
+- **See the winner** — the favorite is badged and the author's score ticks up.
+- **Save a keepsake** — "📸 Save image" renders the prompt + notes to a PNG.
+
+## Quick start
+
+```bash
 npm install
+npm run dev            # dev server on http://localhost:8082
 ```
 
-### Compiles and hot-reloads for development
-```
-npm run dev
-```
-Talks to the real server at `VITE_API_URL` (see `.env`, default
-`http://localhost:8081`). The dev server runs on port **8082** so it doesn't
-collide with the player client (8080) or the game server (8081).
+`npm run dev` talks to the real backend at `VITE_API_URL` (default `http://localhost:8081` —
+start the `quipnotes` server first). Port **8082** keeps it clear of the player client
+(8080) and the game server (8081).
 
 ### Run without a server (offline mode)
-```
+
+```bash
 npm run dev:offline
 ```
-Routes all API calls to an in-memory mock backend (`src/mockApi.js`) instead of
-`fetch`, so the manager runs with no server. The mock implements the
-submitted-notes contract, seeds a few sample ransom notes, and persists to
-`localStorage` so state survives reloads. An "Offline mode" badge appears in the
-UI so it's obvious you're on the mock.
 
-### Compiles and minifies for production
-```
-npm run build
-```
-Preview the production build locally with `npm run preview`.
+Routes every API call to an in-memory mock backend ([`src/mockApi.js`](src/mockApi.js))
+instead of `fetch`, so the manager runs with **no server**. The mock seeds a sample game
+(code `1234`) with a couple of scored players so the scoreboard and board are populated,
+persists to `localStorage`, and shows an "Offline mode" badge in the UI.
 
-### Lints and fixes files
+### Other scripts
+
+```bash
+npm run build          # production build (Vite)
+npm run preview        # preview the production build locally
+npm run lint           # eslint --fix — keep this green before pushing
+npm test               # Vitest, single run
+npm run test:watch     # Vitest, watch mode
 ```
-npm run lint
-```
+
+## Configuration
+
+Vite loads these from mode-specific `.env` files:
+
+| Variable | Where | Purpose |
+| --- | --- | --- |
+| `VITE_API_URL` | `.env`, `.env.production` | Backend base URL. The WebSocket URL is derived from it (`http`→`ws`), so `https` yields a secure `wss`. |
+| `VITE_CLIENT_URL` | `.env`, `.env.production` | Player-client base URL used to build the invite QR / deep-link (`?code=1234`). |
+| `VITE_OFFLINE` | `.env.offline` | `true` routes all calls to `mockApi.js` (set by `dev:offline`). |
+
+## Architecture
+
+- **`src/api.js`** — a generic `apiRequest(method, url, body)`; routes to `mockApi.js` when
+  `VITE_OFFLINE=true`, else `fetch` against `VITE_API_URL`.
+- **`src/App.vue`** — lobby vs. hosting. Adaptive layout: before any prompt is drawn the
+  code is a centered hero with the join QR; once a round starts the code shrinks to a corner
+  badge so the prompt and note board take center stage. Reads the roster/board from the
+  `players`/`submission`/`note_flipped`/`favorite_picked` events (online) or by fetching
+  `GET /players` and the note board (offline).
+- **`src/socket.js`** — the same resilient `WebSocket` wrapper as the player client, opened
+  while hosting for live round/judging/roster events.
+- **`src/mockApi.js`** — the in-memory offline backend, persisted to `localStorage`
+  (key `quipnotes.manager.mock.v2`); mirrors the server's judging contract.
+- **`src/components/`** — `NoteSlate.vue` (a controlled, one-way flip card),
+  `PlayerRoster.vue` (the scoreboard, with a gavel on the judge), and `PromptCard.vue`.
+- **`src/noteImage.js`** — renders the prompt + notes to a keepsake PNG on an offscreen
+  canvas (dependency-free, deterministic; not a DOM screenshot).
+- **`src/clipboard.js`** — the async Clipboard API (with an `execCommand` fallback) behind
+  the "Copy invite" button.
+
+The player, manager, and server all speak the same wire protocol; keep `mockApi.js` in sync
+with the server whenever an endpoint changes.
 
 ## Testing
 
-Unit and component tests run on **Vitest** + **@vue/test-utils** (jsdom
-environment). Run them with:
+Unit and component tests run on **Vitest** + **@vue/test-utils** (jsdom). Tests sit next to
+the code they cover (`src/**/*.test.js`).
 
-```
-npm test            # single run
-npm run test:watch  # watch mode
-```
-
-Tests live next to the code they cover (`src/**/*.test.js`). Current coverage:
-the mock backend contract (`src/mockApi.test.js`), the `apiRequest` offline /
-fetch dispatch (`src/api.test.js`), the `ClickCard` reveal toggle, and `App`'s
-get/clear-notes wiring plus the offline badge. jsdom doesn't expose Web Storage
-here, so `src/test-setup.js` installs a small in-memory `localStorage` polyfill
-that `mockApi.js` persists against.
-
-### Manual / exploratory testing
-
-Use offline mode so you can exercise the full UI without standing up a server:
-
-```
-npm run dev:offline
+```bash
+npm test               # single run
+npm run test:watch     # watch mode
 ```
 
-Then walk the core flows:
+Guidelines:
 
-- **Get Notes** → the seeded notes appear as cards, and the count updates.
-- **Click a card** → it reveals the note; click again to hide it.
-- **Clear Notes** → the cards disappear and the count drops to 0.
-- **Reload the page** → a cleared list stays cleared (localStorage).
+- **Test the contract, not the server.** `mockApi.js` encodes the server's contract —
+  assert against it so offline tests stay meaningful.
+- **Reset state between tests.** Clear `localStorage` (and call `vi.resetModules()`) in a
+  `beforeEach` — `mockApi.js` holds module-level state loaded at import time. jsdom doesn't
+  provide Web Storage here, so `src/test-setup.js` installs an in-memory polyfill.
 
-Reset mock state between runs:
+To reset the offline mock manually, run
+`localStorage.removeItem('quipnotes.manager.mock.v2')` in the devtools console, or just use
+a private window.
 
-```js
-// in the browser devtools console
-localStorage.removeItem('quipnotes.manager.mock.v1')
-```
+## Development notes
 
-or just use a private/incognito window for a clean slate.
+Despite the legacy name, this is **Vite + Vitest**, not Vue CLI. It's its own git repo —
+branch off the latest `master` and open a PR rather than committing straight to `master`.
+See [Vite Configuration Reference](https://vite.dev/config/) to customize the build.
 
-### Best practices
+## License
 
-- **Test against the contract, not the server.** The submitted-notes endpoints
-  (`GET /game/submitted-notes`, `DELETE /game/submitted-notes`) are the seam.
-  `mockApi.js` encodes that contract — keep it and the real server in sync so
-  offline tests stay meaningful.
-- **Reset state between tests.** Clear `localStorage` (and `vi.resetModules()`)
-  in a `beforeEach` so cases don't leak into each other — `mockApi.js` holds
-  module-level state loaded at import time.
+The code in this repository is licensed under the [MIT License](LICENSE).
 
-## Customize configuration
-See the [Vite Configuration Reference](https://vite.dev/config/).
+The Ransom Notes word tiles and prompt cards are **proprietary** to Very Special Games and
+are **not** covered by this license — none are committed here.
