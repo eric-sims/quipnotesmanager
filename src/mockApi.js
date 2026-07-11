@@ -3,7 +3,7 @@
 // Lets the manager run with no server: api.js routes here when VITE_OFFLINE
 // is set. The manager drives the host side of the contract:
 //
-//   POST   /games                          -> { code }   (start a game)
+//   POST   /games                          -> { code }   (start a game; optional { familyFriendly } body)
 //   DELETE /games/:code                     -> 200        (end a game)
 //   GET    /games/:code/submitted-notes     -> { notes: [{ id, tokens, flipped }] }  (cleared each round)
 //   POST   /games/:code/rounds              -> RoundState  (draw prompt; assigns the judge)
@@ -55,19 +55,33 @@ const SEED_PLAYERS = [
 ]
 
 // A small built-in prompt bank so offline hosting can draw prompts. Each game
-// gets its own shuffled copy (a "deck") so rounds vary per game.
+// gets its own shuffled copy (a "deck") so rounds vary per game. Each entry
+// carries a familyFriendly rating mirroring the server's Prompt shape; the
+// offline bank is entirely family-friendly, so the family-friendly toggle is a
+// no-op offline, but the filter path matches the server for faithfulness.
 const PROMPT_BANK = [
-  "The worst possible thing to say on a first date",
-  "A rejected slogan for an energy drink",
-  "What the villain monologues about before losing",
-  "A terrible name for a boat",
-  "What your pet is really thinking about you",
-  "The last text message before the world ended",
-  "A motivational poster nobody asked for",
-  "What the fortune cookie should have said",
-  "A newspaper headline from the year 3000",
-  "The title of your unauthorized autobiography",
+  { text: "The worst possible thing to say on a first date", familyFriendly: true },
+  { text: "A rejected slogan for an energy drink", familyFriendly: true },
+  { text: "What the villain monologues about before losing", familyFriendly: true },
+  { text: "A terrible name for a boat", familyFriendly: true },
+  { text: "What your pet is really thinking about you", familyFriendly: true },
+  { text: "The last text message before the world ended", familyFriendly: true },
+  { text: "A motivational poster nobody asked for", familyFriendly: true },
+  { text: "What the fortune cookie should have said", familyFriendly: true },
+  { text: "A newspaper headline from the year 3000", familyFriendly: true },
+  { text: "The title of your unauthorized autobiography", familyFriendly: true },
 ]
+
+// Prompt texts a new game should draw from: all prompts, or only the
+// family-friendly ones when familyFriendly is set. Falls back to the full bank
+// if the family-friendly subset is empty (mirrors the server's guard), so a
+// game is always playable.
+function promptTextsForMode(familyFriendly) {
+  const texts = PROMPT_BANK.filter(
+    (p) => !familyFriendly || p.familyFriendly
+  ).map((p) => p.text)
+  return texts.length ? texts : PROMPT_BANK.map((p) => p.text)
+}
 
 const SEED_CODE = "1234"
 const STORAGE_KEY = "quipnotes.manager.mock.v2"
@@ -89,11 +103,12 @@ function shuffled(list) {
 let games = {
   [SEED_CODE]: {
     notes: seedNotes(),
-    deck: shuffled(PROMPT_BANK),
+    deck: shuffled(promptTextsForMode(false)),
     cursor: 0,
     round: 0,
     prompt: "",
     players: SEED_PLAYERS.map((p) => ({ ...p })),
+    familyFriendly: false,
     judgeId: "",
     judgingOpen: false,
     favoriteNoteId: 0,
@@ -121,7 +136,7 @@ function roundState(game) {
 // server's StartRound (including its judge-less rule for <2 players).
 function drawNextPrompt(game) {
   if (game.cursor >= game.deck.length) {
-    game.deck = shuffled(PROMPT_BANK)
+    game.deck = shuffled(promptTextsForMode(game.familyFriendly))
     game.cursor = 0
   }
   game.prompt = game.deck[game.cursor]
@@ -201,7 +216,9 @@ const FLIP_RE = /^\/games\/(\d{4})\/notes\/(\d+)\/flip$/
 
 // Backfill round/roster/judging fields on games persisted before they existed.
 function withRoundFields(game) {
-  if (!Array.isArray(game.deck)) game.deck = shuffled(PROMPT_BANK)
+  if (typeof game.familyFriendly !== "boolean") game.familyFriendly = false
+  if (!Array.isArray(game.deck))
+    game.deck = shuffled(promptTextsForMode(game.familyFriendly))
   if (typeof game.cursor !== "number") game.cursor = 0
   if (typeof game.round !== "number") game.round = 0
   if (typeof game.prompt !== "string") game.prompt = ""
@@ -221,19 +238,22 @@ function withRoundFields(game) {
   return game
 }
 
-// Drop-in replacement for api.js#apiRequest's network call. The manager's host
-// endpoints take no request body, so it is accepted for signature parity only.
-export async function mockApiRequest(method, url) {
-  // Start a game.
+// Drop-in replacement for api.js#apiRequest's network call. Only POST /games
+// carries a body ({ familyFriendly }); the other host endpoints ignore it.
+export async function mockApiRequest(method, url, body = null) {
+  // Start a game. An optional { familyFriendly } body limits the deck to
+  // family-friendly prompts (mirrors the server).
   if (method === "POST" && url === "/games") {
     const code = newCode()
+    const familyFriendly = !!(body && body.familyFriendly)
     games[code] = {
       notes: [],
-      deck: shuffled(PROMPT_BANK),
+      deck: shuffled(promptTextsForMode(familyFriendly)),
       cursor: 0,
       round: 0,
       prompt: "",
       players: [],
+      familyFriendly,
       judgeId: "",
       judgingOpen: false,
       favoriteNoteId: 0,
