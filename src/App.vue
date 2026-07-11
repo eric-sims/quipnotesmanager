@@ -106,6 +106,15 @@
           <span class="note-count">
             Answered: {{ submissionCount }} / {{ answerTotal }}
           </span>
+          <!-- Save the prompt + notes as a shareable keepsake image (the digital
+               version of snapping a photo of a great hand). -->
+          <button
+            @click="saveImage"
+            class="game-btn game-btn--ghost game-btn--sm"
+            :disabled="responses.length === 0 || savingImage"
+          >
+            {{ savingImage ? 'Saving…' : '📸 Save image' }}
+          </button>
         </div>
 
         <!-- The round's reveal: who won, once the judge picks. -->
@@ -156,6 +165,7 @@ import {
 import { createGameSocket } from "@/socket";
 import { copyText, shareMessage } from "@/clipboard";
 import { joinUrl } from "@/joinUrl";
+import { saveNotesImage } from "@/noteImage";
 
 const CODE_KEY = "quipnotes.manager.code";
 const ROUND_KEY = "quipnotes.manager.round";
@@ -176,6 +186,7 @@ export default {
       isOffline: IS_OFFLINE,
       busy: false,
       drawing: false,
+      savingImage: false,
       // Family-friendly mode: when on, the game is created with only
       // family-friendly prompts (no explicit/suggestive content). Chosen in the
       // lobby before starting; fixed for the life of the game. Persisted so the
@@ -576,6 +587,28 @@ export default {
       } catch {
         // Non-fatal: fall back to the code + copyable link without a QR.
         this.qrDataUrl = "";
+      }
+    },
+    // Save the current prompt + notes as a formatted PNG keepsake. Renders all
+    // notes' words regardless of flip state, and highlights the round's favorite
+    // (and its winning author) when the judge has picked one.
+    async saveImage() {
+      if (this.savingImage || this.responses.length === 0) return;
+      this.savingImage = true;
+      try {
+        const ok = await saveNotesImage({
+          code: this.code,
+          round: this.round,
+          prompt: this.prompt,
+          notes: this.responses,
+          favoriteNoteId: this.favoriteNoteId,
+          winnerId: this.winnerId,
+        });
+        if (!ok) alert("Couldn't create the image on this browser.");
+      } catch (error) {
+        alert(`Could not save the image: ${error.message}`);
+      } finally {
+        this.savingImage = false;
       }
     },
     async copyInvite() {
