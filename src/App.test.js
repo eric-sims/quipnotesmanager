@@ -72,10 +72,30 @@ describe('App lobby', () => {
 
   it('starts a game and shows the returned code', async () => {
     const wrapper = await mountHosting('4821')
-    expect(apiRequest).toHaveBeenCalledWith('POST', '/games', null, {
-      'Content-Type': 'application/json',
-    })
+    expect(apiRequest).toHaveBeenCalledWith(
+      'POST',
+      '/games',
+      { familyFriendly: false },
+      { 'Content-Type': 'application/json' },
+    )
     expect(wrapper.find('.code-value').text()).toBe('4821')
+  })
+
+  it('starts a family-friendly game when the toggle is on', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.find('.family-toggle__input').setValue(true)
+
+    apiRequest.mockResolvedValueOnce(okJson({ code: '4821' }))
+    await wrapper.find('button').trigger('click') // Start Game
+    await flushPromises()
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      'POST',
+      '/games',
+      { familyFriendly: true },
+      { 'Content-Type': 'application/json' },
+    )
   })
 })
 

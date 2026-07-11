@@ -30,6 +30,19 @@ describe('POST /games', () => {
     const data = await (await api('GET', `/games/${code}/submitted-notes`)).json()
     expect(data.notes).toEqual([])
   })
+
+  it('accepts a { familyFriendly } body and stays playable', async () => {
+    const api = await freshApi()
+    const res = await api('POST', '/games', { familyFriendly: true })
+    expect(res.status).toBe(201)
+    const { code } = await res.json()
+
+    // The offline bank is entirely family-friendly, so a family-friendly game
+    // still draws real prompts round after round.
+    const drawn = await (await api('POST', `/games/${code}/rounds`)).json()
+    expect(typeof drawn.prompt).toBe('string')
+    expect(drawn.prompt.length).toBeGreaterThan(0)
+  })
 })
 
 describe('GET /games/:code/submitted-notes', () => {

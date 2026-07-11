@@ -9,6 +9,23 @@
     <!-- Lobby: no active game yet -->
     <section v-if="!code" class="lobby">
       <p class="lobby__lede">Start a game, then share the code with your friends.</p>
+
+      <!-- Family-friendly toggle: set before starting; fixed once the game runs. -->
+      <label class="family-toggle" :class="{ 'family-toggle--on': familyFriendly }">
+        <input
+          type="checkbox"
+          class="family-toggle__input"
+          v-model="familyFriendly"
+        />
+        <span class="family-toggle__switch" aria-hidden="true"></span>
+        <span class="family-toggle__text">
+          <span class="family-toggle__title">Family-friendly mode</span>
+          <span class="family-toggle__hint">
+            Skip prompts that are explicit, suggestive, or sexual.
+          </span>
+        </span>
+      </label>
+
       <button
         @click="startGame"
         class="game-btn game-btn--primary game-btn--xl"
@@ -143,6 +160,7 @@ import { joinUrl } from "@/joinUrl";
 const CODE_KEY = "quipnotes.manager.code";
 const ROUND_KEY = "quipnotes.manager.round";
 const PROMPT_KEY = "quipnotes.manager.prompt";
+const FAMILY_KEY = "quipnotes.manager.familyFriendly";
 
 export default {
   name: "App",
@@ -158,6 +176,11 @@ export default {
       isOffline: IS_OFFLINE,
       busy: false,
       drawing: false,
+      // Family-friendly mode: when on, the game is created with only
+      // family-friendly prompts (no explicit/suggestive content). Chosen in the
+      // lobby before starting; fixed for the life of the game. Persisted so the
+      // host's preference sticks across sessions.
+      familyFriendly: false,
       copyLabel: "Copy invite",
       // Data-URL of the QR code that deep-links players to the client with the
       // code prefilled. Rendered client-side (no network) whenever code changes.
@@ -189,6 +212,14 @@ export default {
     code(newCode) {
       this.renderQr(newCode);
     },
+    // Persist the family-friendly preference so it sticks across sessions.
+    familyFriendly(on) {
+      try {
+        window.localStorage.setItem(FAMILY_KEY, on ? "1" : "0");
+      } catch {
+        // localStorage can throw in private-mode / sandboxed contexts; ignore.
+      }
+    },
   },
   computed: {
     // How many answers the round expects: the server's count (judge excluded)
@@ -209,6 +240,7 @@ export default {
       this.code = window.localStorage.getItem(CODE_KEY) || "";
       this.round = Number(window.localStorage.getItem(ROUND_KEY)) || 0;
       this.prompt = window.localStorage.getItem(PROMPT_KEY) || "";
+      this.familyFriendly = window.localStorage.getItem(FAMILY_KEY) === "1";
     } catch {
       this.code = "";
     }
@@ -305,9 +337,12 @@ export default {
       if (this.busy) return;
       this.busy = true;
       try {
-        const res = await apiRequest("POST", "/games", null, {
-          "Content-Type": "application/json",
-        });
+        const res = await apiRequest(
+          "POST",
+          "/games",
+          { familyFriendly: this.familyFriendly },
+          { "Content-Type": "application/json" }
+        );
         if (!res.ok) throw new Error(`HTTP error! Status: ${res.status}`);
         const data = await res.json();
         this.code = data.code;
@@ -692,6 +727,94 @@ body {
 .lobby__lede {
   margin: 0;
   font-size: clamp(1.2rem, 2.2vw, 1.7rem);
+  color: var(--color-muted);
+}
+
+/* --- Family-friendly toggle (lobby) --- */
+.family-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 440px;
+  padding: var(--space-4) var(--space-5);
+  text-align: left;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-tile);
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.family-toggle--on {
+  border-color: var(--color-accent);
+}
+
+/* Visually-hidden native checkbox — still focusable and screen-reader-labeled,
+   the visible switch below reflects its state. */
+.family-toggle__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+/* The pill track + knob. */
+.family-toggle__switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 30px;
+  background-color: var(--color-border);
+  border-radius: 999px;
+  transition: background-color 0.2s ease;
+}
+
+.family-toggle__switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  background-color: var(--color-surface);
+  border-radius: 50%;
+  box-shadow: var(--shadow-tile);
+  transition: transform 0.2s ease;
+}
+
+.family-toggle--on .family-toggle__switch {
+  background-color: var(--color-accent);
+}
+
+.family-toggle--on .family-toggle__switch::after {
+  transform: translateX(22px);
+}
+
+.family-toggle__input:focus-visible + .family-toggle__switch {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.family-toggle__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.family-toggle__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.family-toggle__hint {
+  font-size: 0.95rem;
   color: var(--color-muted);
 }
 
