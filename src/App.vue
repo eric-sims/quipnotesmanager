@@ -1,151 +1,177 @@
 <template>
-  <div class="stage">
-    <header class="masthead">
-      <h1 class="app-title">quipNotes</h1>
-      <p class="app-subtitle">Host screen</p>
-      <p v-if="isOffline" class="offline-badge">Offline mode — no server</p>
+  <div class="app">
+    <!-- Host rail: the app chrome once a game is loaded. It replaces the
+         masthead (branding costs ~150px of the room's sightline) and collects
+         every host-only control — code, invite, draw, end — into one strip, so
+         the prompt and notes own the screen below it. -->
+    <header v-if="code" class="host-rail">
+      <div class="host-rail__context">
+        <template v-if="round > 0">
+          <span class="rail-round">Round {{ round }}</span>
+          <span v-if="judgeId" class="judge-line">
+            <span class="judge-line__label">Judge</span> {{ judgeId }}
+          </span>
+        </template>
+        <span v-else class="rail-waiting">Waiting for players…</span>
+        <span v-if="isOffline" class="offline-badge">Offline</span>
+      </div>
+
+      <!-- Controls. The code + invite + draw only ride here during a round; at
+           round 0 the centered hero owns the code and the big Draw button. -->
+      <div class="host-rail__actions">
+        <template v-if="round > 0">
+          <span class="rail-code">{{ code }}</span>
+          <button
+            @click="copyInvite"
+            class="game-btn game-btn--ghost game-btn--sm"
+          >
+            {{ copyLabel }}
+          </button>
+          <button
+            @click="drawPrompt"
+            class="game-btn game-btn--primary game-btn--sm"
+            :disabled="drawing"
+          >
+            {{ drawing ? 'Drawing…' : 'Next prompt' }}
+          </button>
+        </template>
+        <button @click="endGame" class="game-btn game-btn--danger game-btn--sm">
+          End Game
+        </button>
+      </div>
     </header>
 
-    <!-- Lobby: no active game yet -->
-    <section v-if="!code" class="lobby">
-      <p class="lobby__lede">Start a game, then share the code with your friends.</p>
+    <div class="stage" :class="{ 'stage--hosting': code }">
+      <header v-if="!code" class="masthead">
+        <h1 class="app-title">quipNotes</h1>
+        <p class="app-subtitle">Host screen</p>
+        <p v-if="isOffline" class="offline-badge">Offline mode — no server</p>
+      </header>
 
-      <!-- Family-friendly toggle: set before starting; fixed once the game runs. -->
-      <label class="family-toggle" :class="{ 'family-toggle--on': familyFriendly }">
-        <input
-          type="checkbox"
-          class="family-toggle__input"
-          v-model="familyFriendly"
-        />
-        <span class="family-toggle__switch" aria-hidden="true"></span>
-        <span class="family-toggle__text">
-          <span class="family-toggle__title">Family-friendly mode</span>
-          <span class="family-toggle__hint">
-            Skip prompts that are explicit, suggestive, or sexual.
-          </span>
-        </span>
-      </label>
+      <!-- Lobby: no active game yet -->
+      <section v-if="!code" class="lobby">
+        <p class="lobby__lede">Start a game, then share the code with your friends.</p>
 
-      <button
-        @click="startGame"
-        class="game-btn game-btn--primary game-btn--xl"
-        :disabled="busy"
-      >
-        {{ busy ? 'Starting…' : 'Start Game' }}
-      </button>
-    </section>
-
-    <!-- Hosting: a game is running -->
-    <section v-else class="hosting">
-      <!-- Invite code: a giant centered hero while waiting, then shrinks and
-           pins to the corner once the first prompt is drawn (round > 0), so the
-           prompt and notes take center stage. -->
-      <div class="code-card" :class="{ 'code-card--corner': round > 0 }">
-        <span class="code-label">Join at the code</span>
-        <span class="code-value">{{ code }}</span>
-        <!-- QR deep link — only in the roomy hero (round 0); the corner badge is
-             too small to scan. Points at the client with the code prefilled. -->
-        <template v-if="round === 0 && qrDataUrl">
-          <img :src="qrDataUrl" class="code-qr" alt="QR code to join the game" />
-          <span class="code-qr-hint">Scan to join</span>
-        </template>
-        <button
-          @click="copyInvite"
-          class="game-btn game-btn--ghost"
-          :class="{ 'game-btn--sm': round > 0 }"
-        >
-          {{ copyLabel }}
-        </button>
-      </div>
-
-      <!-- Waiting room (no prompt drawn yet): the roster is the focus. Big
-           "Draw prompt" button, prominent roster. -->
-      <template v-if="round === 0">
-        <p class="waiting-lede">Waiting for players…</p>
-        <p class="prompt-empty">Draw the first prompt to begin the round.</p>
-
-        <button
-          @click="drawPrompt"
-          class="game-btn game-btn--primary game-btn--xl"
-          :disabled="drawing"
-        >
-          {{ drawing ? 'Drawing…' : 'Draw prompt' }}
-        </button>
-
-        <PlayerRoster v-if="players.length" :players="players" />
-      </template>
-
-      <!-- Active round: prompt + notes take center stage; the roster tucks to
-           the side as a compact panel, and the draw button is normal-sized. -->
-      <template v-else>
-        <PromptCard :round="round" :prompt="prompt" />
-
-        <p v-if="judgeId" class="judge-line">
-          <span class="judge-line__label">Judge</span> {{ judgeId }}
-        </p>
-
-        <button
-          @click="drawPrompt"
-          class="game-btn game-btn--primary"
-          :disabled="drawing"
-        >
-          {{ drawing ? 'Drawing…' : 'Next prompt' }}
-        </button>
-
-        <PlayerRoster
-          v-if="players.length"
-          :players="players"
-          :judge-id="judgeId"
-          compact
-          class="roster--corner"
-        />
-
-        <div class="board-head">
-          <h2 class="board-title">Submitted notes</h2>
-          <span class="note-count">Number of Notes: {{ responses.length }}</span>
-          <span class="note-count">
-            Answered: {{ submissionCount }} / {{ answerTotal }}
-          </span>
-          <!-- Save the prompt + notes as a shareable keepsake image (the digital
-               version of snapping a photo of a great hand). -->
-          <button
-            @click="saveImage"
-            class="game-btn game-btn--ghost game-btn--sm"
-            :disabled="responses.length === 0 || savingImage"
-          >
-            {{ savingImage ? 'Saving…' : '📸 Save image' }}
-          </button>
-        </div>
-
-        <!-- The round's reveal: who won, once the judge picks. -->
-        <p v-if="winnerId" class="winner-banner">
-          🏆 {{ winnerId }} wins the round!
-        </p>
-        <p v-else-if="judgingOpen" class="board-lede">
-          Judging! {{ judgeId ? `${judgeId} flips the notes and picks a favorite.` : '' }}
-        </p>
-
-        <p v-if="responses.length === 0" class="board-empty">
-          No notes yet. They'll appear here as players submit.
-        </p>
-
-        <div v-else class="board">
-          <NoteSlate
-            v-for="note in responses"
-            :key="note.id"
-            :tokens="note.tokens"
-            :flipped="note.flipped"
-            :flippable="canFlip"
-            :winner="note.id === favoriteNoteId"
-            @flip="flipNote(note.id)"
+        <!-- Family-friendly toggle: set before starting; fixed once the game runs. -->
+        <label class="family-toggle" :class="{ 'family-toggle--on': familyFriendly }">
+          <input
+            type="checkbox"
+            class="family-toggle__input"
+            v-model="familyFriendly"
           />
-        </div>
-      </template>
+          <span class="family-toggle__switch" aria-hidden="true"></span>
+          <span class="family-toggle__text">
+            <span class="family-toggle__title">Family-friendly mode</span>
+            <span class="family-toggle__hint">
+              Skip prompts that are explicit, suggestive, or sexual.
+            </span>
+          </span>
+        </label>
 
-      <div class="actions">
-        <button @click="endGame" class="game-btn game-btn--danger">End Game</button>
-      </div>
-    </section>
+        <button
+          @click="startGame"
+          class="game-btn game-btn--primary game-btn--xl"
+          :disabled="busy"
+        >
+          {{ busy ? 'Starting…' : 'Start Game' }}
+        </button>
+      </section>
+
+      <!-- Hosting: a game is running -->
+      <section v-else class="hosting">
+        <!-- Waiting room (no prompt drawn yet): nobody's playing yet, so the
+             code is the whole point — a giant centered hero with the QR. -->
+        <template v-if="round === 0">
+          <div class="code-card">
+            <span class="code-label">Join at the code</span>
+            <span class="code-value">{{ code }}</span>
+            <!-- QR deep link — only in the roomy hero; the rail badge is too
+                 small to scan. Points at the client with the code prefilled. -->
+            <template v-if="qrDataUrl">
+              <img :src="qrDataUrl" class="code-qr" alt="QR code to join the game" />
+              <span class="code-qr-hint">Scan to join</span>
+            </template>
+            <button @click="copyInvite" class="game-btn game-btn--ghost">
+              {{ copyLabel }}
+            </button>
+          </div>
+
+          <p class="prompt-empty">Draw the first prompt to begin the round.</p>
+
+          <button
+            @click="drawPrompt"
+            class="game-btn game-btn--primary game-btn--xl"
+            :disabled="drawing"
+          >
+            {{ drawing ? 'Drawing…' : 'Draw prompt' }}
+          </button>
+
+          <PlayerRoster v-if="players.length" :players="players" />
+        </template>
+
+        <!-- Active round: a real two-column grid — scoreboard rail on the left,
+             prompt + notes filling the rest. A grid (rather than the fixed
+             overlays this replaces) means the roster reserves its own gutter
+             instead of floating over the board's first column. -->
+        <div v-else class="round-layout">
+          <aside class="round-layout__side">
+            <PlayerRoster
+              v-if="players.length"
+              :players="players"
+              :judge-id="judgeId"
+              compact
+            />
+          </aside>
+
+          <main class="round-layout__main">
+            <PromptCard :prompt="prompt" />
+
+            <!-- The round's reveal: who won, once the judge picks. -->
+            <p v-if="winnerId" class="winner-banner">
+              🏆 {{ winnerId }} wins the round!
+            </p>
+
+            <!-- One strip for everything about the board: judging status, the
+                 counts, and the keepsake export. Three stacked rows of this used
+                 to cost ~165px above the notes. -->
+            <div class="board-meta">
+              <span v-if="judgingOpen && !winnerId" class="board-meta__lede">
+                Judging!{{ judgeId ? ` ${judgeId} picks a favorite.` : '' }}
+              </span>
+              <span class="note-count">{{ responses.length }} notes</span>
+              <span class="note-count">
+                Answered {{ submissionCount }} / {{ answerTotal }}
+              </span>
+              <!-- Save the prompt + notes as a shareable keepsake image (the
+                   digital version of snapping a photo of a great hand). -->
+              <button
+                @click="saveImage"
+                class="game-btn game-btn--ghost game-btn--sm"
+                :disabled="responses.length === 0 || savingImage"
+              >
+                {{ savingImage ? 'Saving…' : '📸 Save image' }}
+              </button>
+            </div>
+
+            <p v-if="responses.length === 0" class="board-empty">
+              No notes yet. They'll appear here as players submit.
+            </p>
+
+            <div v-else class="board">
+              <NoteSlate
+                v-for="note in responses"
+                :key="note.id"
+                :tokens="note.tokens"
+                :flipped="note.flipped"
+                :flippable="canFlip"
+                :winner="note.id === favoriteNoteId"
+                @flip="flipNote(note.id)"
+              />
+            </div>
+          </main>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -705,14 +731,68 @@ body {
   width: 100%;
   max-width: 1280px;
   margin: 0 auto;
-  padding: var(--space-6) var(--space-5) 96px;
+  /* Roomy in the lobby; the hosting view overrides this to claw back the
+     vertical space the notes need. */
+  padding: var(--space-6) var(--space-5);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-5);
 }
 
-/* --- Masthead --- */
+/* --- Host rail: the chrome while a game is loaded ---
+   Sticky rather than fixed so it occupies its own height instead of needing the
+   stage to reserve a matching offset — and it stays on screen if a very full
+   board does end up scrolling. */
+.host-rail {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: var(--shadow-tile);
+}
+
+.host-rail__context,
+.host-rail__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.rail-round {
+  font-family: var(--font-tile);
+  font-size: clamp(0.9rem, 1.4vw, 1.1rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-muted);
+}
+
+/* The invite code, still accent-red and monospaced — small enough to be chrome,
+   big enough that a latecomer can read it off the screen. */
+.rail-code {
+  font-family: var(--font-tile);
+  font-size: clamp(1.5rem, 2.6vw, 2.1rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.1em;
+  color: var(--color-accent);
+}
+
+.rail-waiting {
+  font-size: clamp(1rem, 1.8vw, 1.3rem);
+  font-weight: 700;
+}
+
+/* --- Masthead (lobby only — dropped once a game loads, so the room's
+   sightline isn't spent on branding) --- */
 .masthead {
   display: flex;
   flex-direction: column;
@@ -860,7 +940,17 @@ body {
   gap: var(--space-5);
 }
 
-/* The big "join here" card — readable from across a room. */
+/* Once a game is loaded the stage tightens up: the rail already provides a
+   comfortable top edge, and every pixel here is one the notes don't get. */
+.stage--hosting {
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  gap: var(--space-4);
+}
+
+/* The big "join here" card — readable from across a room. Waiting room only;
+   during a round the code lives in the rail. Vertical padding is kept tight so
+   the whole waiting room (code + QR + draw + roster) clears a laptop viewport
+   without a scrollbar. */
 .code-card {
   display: flex;
   flex-direction: column;
@@ -868,27 +958,11 @@ body {
   gap: var(--space-3);
   width: 100%;
   max-width: 640px;
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-4) var(--space-6);
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  transition: padding 0.35s ease, max-width 0.35s ease;
-}
-
-/* Once a round is live the code steps aside: it shrinks and pins to the
-   top-right corner so the prompt and notes own the center of the screen. */
-.code-card--corner {
-  position: fixed;
-  top: var(--space-4);
-  right: var(--space-4);
-  z-index: 20;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-3);
-  width: auto;
-  max-width: none;
-  padding: var(--space-2) var(--space-3);
 }
 
 .code-label {
@@ -898,13 +972,6 @@ body {
   color: var(--color-muted);
 }
 
-/* In the corner the verbose label is dropped so the badge stays compact and
-   clears the centered masthead title; the accent code + Copy button read on
-   their own. */
-.code-card--corner .code-label {
-  display: none;
-}
-
 .code-value {
   font-family: var(--font-tile);
   font-size: clamp(4rem, 14vw, 9rem);
@@ -912,12 +979,40 @@ body {
   line-height: 1;
   letter-spacing: 0.12em;
   color: var(--color-accent);
-  transition: font-size 0.35s ease;
 }
 
-.code-card--corner .code-value {
-  font-size: clamp(1.6rem, 4vw, 2.4rem);
-  letter-spacing: 0.08em;
+/* --- Active-round layout: scoreboard column + prompt/notes column ---
+   A real grid, so the roster reserves its own gutter. The fixed-overlay roster
+   this replaces sat on top of the board's first column and only looked fine
+   because the board started ~690px down the page. */
+.round-layout {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.round-layout__main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0; /* let the board grid shrink instead of overflowing the column */
+}
+
+/* Too narrow for a side-by-side: the columns stack rather than squeezing the
+   notes into a sliver. The scoreboard drops *below* the board — stacked above
+   it, a full-width roster costs ~290px before you reach a single note, which is
+   the exact problem this layout exists to fix. */
+@media (max-width: 900px) {
+  .round-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .round-layout__side {
+    order: 2;
+  }
 }
 
 /* Join QR — white quiet-zone keeps it scannable on the paper surface and in
@@ -938,46 +1033,21 @@ body {
   color: var(--color-muted);
 }
 
-/* The "Waiting for players…" lede shown above the code while no round is live. */
-.waiting-lede {
-  margin: 0;
-  font-size: clamp(1.2rem, 2.4vw, 1.8rem);
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-/* During a round the roster becomes a compact scoreboard pinned to the top-left
-   corner — mirroring the code badge in the top-right. On wide host screens the
-   centered content (max 900px) leaves room in the margins for it. On narrower
-   screens, where a fixed panel would collide with the prompt, it falls back to
-   sitting inline at the left. */
-.roster--corner {
-  align-self: flex-start;
-}
-
-@media (min-width: 1000px) {
-  .roster--corner {
-    position: fixed;
-    top: var(--space-4);
-    left: var(--space-4);
-    z-index: 20;
-    max-height: calc(100vh - 2 * var(--space-4));
-    overflow-y: auto;
-  }
-}
-
-.board-head {
+/* One strip under the prompt carrying the whole state of the board: judging
+   status, counts, and the export. The "Submitted notes" heading it replaces was
+   labelling the obvious — the notes are the thing you're looking at. */
+.board-meta {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
-  gap: var(--space-3) var(--space-4);
+  gap: var(--space-2) var(--space-3);
 }
 
-.board-title {
-  margin: 0;
-  font-size: clamp(1.3rem, 2.4vw, 2rem);
-  font-weight: 700;
+.board-meta__lede {
+  font-size: clamp(1rem, 1.6vw, 1.2rem);
+  font-weight: 600;
+  color: var(--color-text);
 }
 
 .note-count {
@@ -992,11 +1062,13 @@ body {
   color: var(--color-muted);
 }
 
-/* Who holds the gavel this round — sits right under the prompt. */
+/* Who holds the gavel this round — a rail item, next to the round number. */
 .judge-line {
+  display: inline-flex;
+  align-items: center;
   margin: 0;
   font-family: var(--font-tile);
-  font-size: clamp(1.1rem, 2vw, 1.5rem);
+  font-size: clamp(1rem, 1.6vw, 1.25rem);
   font-weight: 700;
 }
 
@@ -1009,14 +1081,6 @@ body {
   color: var(--color-accent-contrast);
   background-color: var(--color-accent);
   border-radius: var(--radius-sm);
-}
-
-/* The judging-phase lede over the board. */
-.board-lede {
-  margin: 0;
-  font-size: clamp(1rem, 1.8vw, 1.3rem);
-  font-weight: 600;
-  color: var(--color-text);
 }
 
 /* The round's reveal — big enough to read across the room. */
@@ -1046,14 +1110,7 @@ body {
   gap: var(--space-5);
 }
 
-/* --- Actions / buttons (shared vocabulary with the client) --- */
-.actions {
-  display: flex;
-  gap: var(--space-4);
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
+/* --- Buttons (shared vocabulary with the client) --- */
 .game-btn {
   min-height: 56px;
   padding: var(--space-3) var(--space-5);
