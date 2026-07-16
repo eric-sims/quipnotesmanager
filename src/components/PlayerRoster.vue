@@ -144,15 +144,16 @@ export default {
   border-color: var(--color-accent);
 }
 
-/* --- Compact variant: a small corner scoreboard during a round. Narrow, with
-   players stacked vertically so a full lobby stays a tidy column. --- */
+/* --- Compact variant: the sidebar scoreboard during a round. "Compact" means
+   it stacks into a narrow column and fills its grid track — not that it shrinks
+   its type. Names and scores stay big enough to read from the couch, since
+   knowing the score is half of why anyone looks at the host screen. --- */
 .roster--compact {
   align-items: stretch;
   gap: var(--space-2);
-  width: auto;
-  min-width: 128px;
-  max-width: 200px;
-  padding: var(--space-2) var(--space-3);
+  width: 100%;
+  max-width: none;
+  padding: var(--space-3);
 }
 
 .roster--compact .roster__head {
@@ -161,30 +162,55 @@ export default {
 }
 
 .roster--compact .roster__title {
-  font-size: 0.95rem;
+  font-size: clamp(1rem, 1.4vw, 1.2rem);
 }
 
 .roster--compact .roster__count {
-  font-size: 0.8rem;
-  padding: 1px var(--space-1);
+  font-size: 0.9rem;
 }
 
 .roster--compact .roster__list {
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
 .roster--compact .player-chip {
   justify-content: flex-start;
-  padding: var(--space-1) var(--space-2);
-  font-size: 0.9rem;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: clamp(1.05rem, 1.3vw, 1.3rem);
+}
+
+/* Names can be long; let them ellipsis rather than blow out the column. */
+.roster--compact .player-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* In the stacked column, right-align every score so the panel reads as a
    scoreboard. */
 .roster--compact .player-chip__score {
   margin-left: auto;
+  flex: 0 0 auto;
+  min-width: 2.2ch;
+  padding: 2px var(--space-2);
+  font-size: 0.95em;
+}
+
+/* Below the side-by-side breakpoint the roster spans the full width, so lay the
+   players out in a wrapping row again rather than one tall column. */
+@media (max-width: 900px) {
+  .roster--compact .roster__list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .roster--compact .player-chip__score {
+    margin-left: 0;
+  }
 }
 </style>

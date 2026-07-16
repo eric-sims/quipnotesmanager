@@ -127,8 +127,8 @@ describe('App hosting', () => {
       { 'Content-Type': 'application/json' },
     )
     expect(wrapper.findAllComponents({ name: 'NoteSlate' })).toHaveLength(2)
-    expect(wrapper.text()).toContain('Number of Notes: 2')
-    expect(wrapper.text()).toContain('Answered: 2 / 3')
+    expect(wrapper.text()).toContain('2 notes')
+    expect(wrapper.text()).toContain('Answered 2 / 3')
   })
 
   it('renders the board in the server order with server-owned flip state', async () => {
@@ -185,11 +185,13 @@ describe('App hosting', () => {
     expect(wrapper.text()).toContain('Ada')
   })
 
-  it('shows the live roster before any note, and shrinks the code once a round starts', async () => {
+  it('shows the live roster before any note, and moves the code to the rail once a round starts', async () => {
     const wrapper = await mountHosting('4821')
 
-    // Waiting state: giant code hero (no corner modifier), no roster yet.
-    expect(wrapper.find('.code-card--corner').exists()).toBe(false)
+    // Waiting state: the giant code hero owns the screen; the rail has no code
+    // of its own yet, and no roster has joined.
+    expect(wrapper.find('.code-value').exists()).toBe(true)
+    expect(wrapper.find('.rail-code').exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(false)
     expect(wrapper.text()).toContain('Waiting for players')
 
@@ -199,14 +201,30 @@ describe('App hosting', () => {
     expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('Ada')
     expect(wrapper.text()).toContain('Grace')
-    expect(wrapper.find('.code-card--corner').exists()).toBe(false)
+    expect(wrapper.find('.rail-code').exists()).toBe(false)
 
-    // Drawing the first prompt shrinks the code to the corner.
+    // Drawing the first prompt retires the hero: the code steps into the rail
+    // so the prompt and notes own the screen.
     socketOnEvent({ type: 'round_started', round: 1, prompt: 'A boat' })
     await flushPromises()
-    expect(wrapper.find('.code-card--corner').exists()).toBe(true)
+    expect(wrapper.find('.code-value').exists()).toBe(false)
+    expect(wrapper.find('.rail-code').text()).toBe('4821')
     // Roster stays visible during the round.
     expect(wrapper.findComponent({ name: 'PlayerRoster' }).exists()).toBe(true)
+  })
+
+  it('hides the masthead once a game is loaded, and keeps the rail on screen', async () => {
+    const wrapper = mount(App)
+    await flushPromises()
+
+    // Lobby: branding is the whole point, and there's no rail.
+    expect(wrapper.find('.masthead').exists()).toBe(true)
+    expect(wrapper.find('.host-rail').exists()).toBe(false)
+
+    // Hosting: the masthead's ~150px goes to the notes instead.
+    const hosting = await mountHosting('4821')
+    expect(hosting.find('.masthead').exists()).toBe(false)
+    expect(hosting.find('.host-rail').exists()).toBe(true)
   })
 
   it('shows the judge and the scored roster during a round', async () => {
@@ -228,7 +246,7 @@ describe('App hosting', () => {
     expect(chips[0].find('.player-chip__judge').exists()).toBe(true)
     expect(chips[1].find('.player-chip__judge').exists()).toBe(false)
     // Two players, one judging → one expected answer.
-    expect(wrapper.text()).toContain('Answered: 0 / 1')
+    expect(wrapper.text()).toContain('Answered 0 / 1')
   })
 
   it('mirrors a note_flipped event onto the matching slate', async () => {
@@ -334,7 +352,7 @@ describe('App hosting', () => {
     const wrapper = await mountHosting('4821')
 
     apiRequest.mockResolvedValueOnce(okJson({}, 200))
-    await wrapper.find('.actions button').trigger('click') // End Game
+    await wrapper.find('.game-btn--danger').trigger('click') // End Game
     await flushPromises()
 
     expect(apiRequest).toHaveBeenLastCalledWith('DELETE', '/games/4821', null, {
@@ -396,7 +414,7 @@ describe('App hosting', () => {
     const wrapper = await mountHosting('4821')
 
     apiRequest.mockRejectedValueOnce(new TypeError('Failed to fetch'))
-    await wrapper.find('.actions button').trigger('click') // End Game
+    await wrapper.find('.game-btn--danger').trigger('click') // End Game
     await flushPromises()
 
     expect(wrapper.find('.code-value').exists()).toBe(false)
