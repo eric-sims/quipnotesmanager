@@ -659,7 +659,7 @@ export default {
   --color-tile-border: #e0d8c6;
 }
 
-@media (prefers-color-scheme: dark) {
+/* @media (prefers-color-scheme: dark) {
   :root {
     --color-bg: #1b1a17;
     --color-surface: #262420;
@@ -676,7 +676,7 @@ export default {
     --color-tile-text: #1a1a1a;
     --color-tile-border: #cabfa8;
   }
-}
+} */
 
 * {
   box-sizing: border-box;
